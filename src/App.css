@@ -50,31 +50,45 @@
 
 .viewport {
   position: relative;
+  width: 100%;
   height: 9.5rem;
   overflow: hidden;
   background: transparent;
+  border: 1px solid #374151;
+  border-radius: 0.5rem;
+  background-color: rgba(17, 24, 39, 0.5);
 }
 
 .flow {
   position: relative;
+  width: 100%;
+  height: 100%;
+  padding: 1rem;
   will-change: transform;
   transition: transform 160ms ease;
   font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
   font-size: 1.125rem;
   line-height: 1.75;
   color: #e5e7eb;
+  word-wrap: break-word;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  box-sizing: border-box;
 }
 
 .word {
   display: inline;
   white-space: pre-wrap;
   word-break: break-word;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
 }
 
 .char {
   position: relative;
   display: inline;
   transition: color 0.1s ease;
+  white-space: pre-wrap;
 }
 
 .char.pending {
@@ -102,6 +116,7 @@
 .space {
   display: inline;
   transition: color 0.1s ease;
+  white-space: pre-wrap;
 }
 
 .space.pending {
@@ -123,6 +138,7 @@
   transition: none;
   pointer-events: none;
   z-index: 10;
+  will-change: transform;
 }
 
 .input-trap {

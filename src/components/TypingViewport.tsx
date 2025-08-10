@@ -29,7 +29,7 @@ export const TypingViewport = forwardRef<TypingViewportRef, TypingViewportProps>
   onCompositionEnd,
   isActive
 }, ref) => {
-  // Core refs
+  // Core DOM refs
   const viewportRef = useRef<HTMLDivElement>(null);
   const flowRef = useRef<HTMLDivElement>(null);
   const caretRef = useRef<HTMLSpanElement>(null);
@@ -40,17 +40,23 @@ export const TypingViewport = forwardRef<TypingViewportRef, TypingViewportProps>
   const charRefs = useRef<Map<string, HTMLSpanElement>>(new Map());
   const spaceRefs = useRef<Map<number, HTMLSpanElement>>(new Map());
   
-  // Line virtualization refs (no setState during typing)
+  // Layout and positioning refs (no setState during typing)
   const lineOfWordRef = useRef<number[]>([]);
   const currentLineRef = useRef(0);
   const lineHeightRef = useRef(0);
+  const containerWidthRef = useRef(0);
+  const containerHeightRef = useRef(0);
+  
+  // Animation and timing refs
   const rafIdRef = useRef<number | null>(null);
   const isComposingRef = useRef(false);
+  const pendingLayoutRef = useRef(false);
   
   // ResizeObserver with throttling
   const resizeObserver = useRef<ResizeObserver | null>(null);
   const pendingResizeRef = useRef(false);
   const lastLineHeightRef = useRef(0);
+  const lastContainerWidthRef = useRef(0);
 
   // Expose focus method
   useImperativeHandle(ref, () => ({
@@ -61,19 +67,31 @@ export const TypingViewport = forwardRef<TypingViewportRef, TypingViewportProps>
     }
   }));
 
-  // Calculate line indices (throttled)
+  // Calculate line indices and word wrapping
   const calculateLineIndices = useCallback(() => {
     if (!flowRef.current || wordRefs.current.size === 0) return;
 
     const flow = flowRef.current;
     const computedStyle = window.getComputedStyle(flow);
     const newLineHeight = parseFloat(computedStyle.lineHeight);
+    const newContainerWidth = flow.clientWidth;
     
-    // Only update if line height actually changed
-    if (newLineHeight !== lastLineHeightRef.current) {
+    // Only update if dimensions actually changed
+    const lineHeightChanged = newLineHeight !== lastLineHeightRef.current;
+    const containerWidthChanged = newContainerWidth !== lastContainerWidthRef.current;
+    
+    if (lineHeightChanged) {
       lastLineHeightRef.current = newLineHeight;
       lineHeightRef.current = newLineHeight;
     }
+    
+    if (containerWidthChanged) {
+      lastContainerWidthRef.current = newContainerWidth;
+      containerWidthRef.current = newContainerWidth;
+    }
+
+    // Only recalculate if dimensions changed
+    if (!lineHeightChanged && !containerWidthChanged) return;
 
     const firstWord = wordRefs.current.get(0);
     if (!firstWord) return;
@@ -102,15 +120,18 @@ export const TypingViewport = forwardRef<TypingViewportRef, TypingViewportProps>
       rafIdRef.current = null;
       if (!isActive) return;
       
-      // Update caret position
-      updateCaretPosition();
+      // Batch all DOM reads
+      calculateLineIndices();
       
-      // Update line translation if needed
+      // Batch all DOM writes
+      updateCaretPosition();
       updateLineTranslation();
+      
+      pendingLayoutRef.current = false;
     });
-  }, [isActive]);
+  }, [isActive, calculateLineIndices]);
 
-  // Update caret position (DOM reads)
+  // Update caret position (DOM reads + writes in one batch)
   const updateCaretPosition = useCallback(() => {
     if (!flowRef.current || !caretRef.current) return;
 
@@ -143,7 +164,7 @@ export const TypingViewport = forwardRef<TypingViewportRef, TypingViewportProps>
     }
   }, [activeWord, activeChar, words]);
 
-  // Update line translation (DOM writes)
+  // Update line translation (smooth upward movement)
   const updateLineTranslation = useCallback(() => {
     if (!flowRef.current || activeWord >= lineOfWordRef.current.length) return;
     
@@ -166,7 +187,7 @@ export const TypingViewport = forwardRef<TypingViewportRef, TypingViewportProps>
     return 0.35; // Dimmed for other lines
   }, []);
 
-  // Initialize line indices after mount
+  // Initialize layout after mount
   useEffect(() => {
     if (isActive && wordRefs.current.size > 0) {
       calculateLineIndices();
@@ -174,7 +195,7 @@ export const TypingViewport = forwardRef<TypingViewportRef, TypingViewportProps>
     }
   }, [isActive, calculateLineIndices, scheduleLayoutUpdate]);
 
-  // Handle font loading once
+  // Handle font loading
   useEffect(() => {
     if (!isActive) return;
     
@@ -219,7 +240,8 @@ export const TypingViewport = forwardRef<TypingViewportRef, TypingViewportProps>
 
   // Update layout on active word/char changes
   useEffect(() => {
-    if (isActive) {
+    if (isActive && !pendingLayoutRef.current) {
+      pendingLayoutRef.current = true;
       scheduleLayoutUpdate();
     }
   }, [activeWord, activeChar, isActive, scheduleLayoutUpdate]);
@@ -245,10 +267,8 @@ export const TypingViewport = forwardRef<TypingViewportRef, TypingViewportProps>
   }, []);
 
   // Input event handlers (minimal, no setState)
-  const handleBeforeInput = useCallback((e: React.FormEvent<HTMLInputElement>) => {
+  const handleInput = useCallback((e: React.FormEvent<HTMLInputElement>) => {
     if (!isActive || isComposingRef.current) return;
-    
-    e.preventDefault();
     
     const target = e.target as HTMLInputElement;
     if (target.value) {
@@ -329,8 +349,12 @@ export const TypingViewport = forwardRef<TypingViewportRef, TypingViewportProps>
         aria-label="typing test"
         style={{
           position: 'relative',
+          width: '100%',
           height: '9.5rem',
-          overflow: 'hidden'
+          overflow: 'hidden',
+          border: '1px solid #374151',
+          borderRadius: '0.5rem',
+          backgroundColor: 'rgba(17, 24, 39, 0.5)'
         }}
       >
         <div 
@@ -338,8 +362,18 @@ export const TypingViewport = forwardRef<TypingViewportRef, TypingViewportProps>
           ref={flowRef}
           style={{
             position: 'relative',
+            width: '100%',
+            height: '100%',
+            padding: '1rem',
             willChange: 'transform',
-            transition: 'transform 160ms ease'
+            transition: 'transform 160ms ease',
+            fontFamily: "'JetBrains Mono', 'Fira Code', 'Consolas', monospace",
+            fontSize: '1.125rem',
+            lineHeight: '1.75',
+            color: '#e5e7eb',
+            wordWrap: 'break-word',
+            whiteSpace: 'pre-wrap',
+            overflowWrap: 'break-word'
           }}
         >
           {words.map((word, wordIdx) => (
@@ -348,7 +382,12 @@ export const TypingViewport = forwardRef<TypingViewportRef, TypingViewportProps>
               className="word" 
               data-w={wordIdx}
               ref={(el) => setWordRef(wordIdx, el)}
-              style={{ opacity: getLineOpacity(wordIdx) }}
+              style={{ 
+                opacity: getLineOpacity(wordIdx),
+                display: 'inline',
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word'
+              }}
             >
               {word.split('').map((char, charIdx) => {
                 const state = charState[wordIdx]?.[charIdx] || 'pending';
@@ -358,6 +397,11 @@ export const TypingViewport = forwardRef<TypingViewportRef, TypingViewportProps>
                     className={`char ${state}`}
                     data-c={charIdx}
                     ref={(el) => setCharRef(wordIdx, charIdx, el)}
+                    style={{
+                      position: 'relative',
+                      display: 'inline',
+                      transition: 'color 0.1s ease'
+                    }}
                   >
                     {char}
                   </span>
@@ -366,6 +410,10 @@ export const TypingViewport = forwardRef<TypingViewportRef, TypingViewportProps>
               <span 
                 className={`space ${charState[wordIdx]?.[word.length] || 'pending'}`}
                 ref={(el) => setSpaceRef(wordIdx, el)}
+                style={{
+                  display: 'inline',
+                  transition: 'color 0.1s ease'
+                }}
               >
                 {' '}
               </span>
@@ -378,9 +426,10 @@ export const TypingViewport = forwardRef<TypingViewportRef, TypingViewportProps>
             style={{
               position: 'absolute',
               width: '2px',
-              backgroundColor: 'rgb(34 197 94)',
+              backgroundColor: '#10b981',
               transition: 'none',
-              pointerEvents: 'none'
+              pointerEvents: 'none',
+              zIndex: 10
             }}
           />
         </div>
@@ -394,7 +443,7 @@ export const TypingViewport = forwardRef<TypingViewportRef, TypingViewportProps>
         spellCheck={false}
         inputMode="none"
         aria-hidden="true"
-        onChange={handleBeforeInput}
+        onChange={handleInput}
         onKeyDown={handleKeyDown}
         onCompositionStart={handleCompositionStart}
         onCompositionEnd={handleCompositionEnd}
@@ -406,7 +455,8 @@ export const TypingViewport = forwardRef<TypingViewportRef, TypingViewportProps>
           height: '1px',
           padding: 0,
           border: 'none',
-          outline: 'none'
+          outline: 'none',
+          background: 'transparent'
         }}
       />
     </section>
