@@ -142,6 +142,72 @@
     transition: all 0.1s ease-out;
   }
 
+  /* Typing field styles - Monkeytype-like */
+  .typing-field {
+    position: relative;
+    font-size: clamp(1rem, 2.4vw, 2rem);
+    line-height: 1.5;
+    letter-spacing: 0.02em;
+    user-select: none;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+    color: var(--fg, #e5e7eb);
+    padding: 1rem;
+    min-height: 200px;
+    background: rgba(0, 0, 0, 0.3);
+    border-radius: 0.5rem;
+    border: 1px solid rgba(59, 130, 246, 0.3);
+  }
+
+  .word {
+    margin-right: 0.5ch;
+    white-space: pre;
+  }
+
+  .char {
+    position: relative;
+  }
+
+  .char.pending {
+    opacity: 0.6;
+    color: var(--fg-dim, #9ca3af);
+  }
+
+  .char.correct {
+    opacity: 1;
+    color: var(--fg, #e5e7eb);
+  }
+
+  .char.incorrect {
+    opacity: 1;
+    color: var(--error, #ef4444);
+    text-decoration: underline;
+    text-decoration-color: var(--error, #ef4444);
+    text-decoration-thickness: 2px;
+  }
+
+  .char.extra {
+    opacity: 1;
+    background: rgba(239, 68, 68, 0.15);
+    color: var(--error, #ef4444);
+  }
+
+  #caret {
+    position: absolute;
+    width: 2px;
+    height: 1.2em;
+    background: var(--fg, #e5e7eb);
+    opacity: 0.8;
+    animation: blink 1s step-end infinite;
+    pointer-events: none;
+    z-index: 10;
+  }
+
+  @keyframes blink {
+    50% {
+      opacity: 0;
+    }
+  }
+
   .btn-active:active {
     transform: translateY(0);
     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);

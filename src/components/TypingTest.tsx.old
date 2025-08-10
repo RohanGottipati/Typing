@@ -10,7 +10,7 @@ import { ErrorAnalysis } from './ErrorAnalysis';
 import { WPMPrediction } from './WPMPrediction';
 import { generateText, generateExactWordCount, TextGeneratorOptions } from '@/lib/textGenerator';
 import { getRandomQuote } from '@/lib/quotesData';
-import { saveSession } from '@/lib/sessionStorage';
+import { saveSession, getSessions } from '@/lib/sessionStorage';
 import { calculateBehavioralMetrics } from '@/lib/behavioralMetrics';
 import { analyzeTypingPersona, getPersonaInsights } from '@/lib/typingPersonas';
 import { exportToCSV, exportToJSON } from '@/lib/exportUtils';
@@ -104,28 +104,26 @@ export const TypingTest = () => {
     topErrorHotspots: [],
     topBackspaceHotspots: []
   });
-  
-  // Typing persona
   const [typingPersona, setTypingPersona] = useState<any>(null);
   const [personaInsights, setPersonaInsights] = useState<string[]>([]);
   
-  // Keystroke logging
-  const [keystrokeLog, setKeystrokeLog] = useState<KeystrokeData[]>([]);
-  
-  // Zen mode
+  // Zen mode state
   const [zenContent, setZenContent] = useState('');
   
-  // Refs
+  // Keystroke tracking
+  const [keystrokeLog, setKeystrokeLog] = useState<KeystrokeData[]>([]);
+  
+  // Refs for cleanup
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const testEndedRef = useRef(false);
 
-  // Generate text for current mode
+  // Generate text based on settings
   const generateTextForMode = useCallback(() => {
     if (testSettings.mode === 'custom' && testSettings.customText) {
       return testSettings.customText;
     }
     
-    if (testSettings.mode === 'words' || (testSettings.mode === 'custom' && testSettings.customUseWords)) {
+    if (testSettings.mode === 'words' && testSettings.wordCount) {
       const options: TextGeneratorOptions = {
         includeNumbers: testSettings.numbers,
         includePunctuation: testSettings.punctuation,
@@ -259,7 +257,7 @@ export const TypingTest = () => {
     
     setShowResults(true);
     setIsTestActive(false);
-  }, [testStartTime, testSettings, correctCharacters, totalTypedCharacters, backspaces, analytics_wpmTimeline, keystrokeLog, firstKeystrokeTime]);
+  }, [testStartTime, testSettings, correctCharacters, totalTypedCharacters, backspaces, analytics_wpmTimeline, keystrokeLog]);
 
   // Handle backspace
   const handleBackspace = useCallback(() => {
@@ -398,6 +396,123 @@ export const TypingTest = () => {
       }
     }
   }, [isTestActive, isCountingDown, testSettings.mode, currentPosition, expectedText, firstKeystrokeTime, testStartTime, typedCharacters, characterStatus, analytics_correctCharsSoFar, handleBackspace]);
+    if (!isTestActive || isCountingDown) return;
+    
+    if (testSettings.mode === 'zen') return;
+    
+    if (firstKeystrokeTime === null && testStartTime) {
+      setFirstKeystrokeTime(Date.now());
+    }
+    
+    const timestamp = testStartTime ? (Date.now() - testStartTime) / 1000 : 0;
+    
+    // Handle backspace
+    if (e.key === 'Backspace') {
+      e.preventDefault();
+      handleBackspace();
+      return;
+    }
+    
+    // Handle space
+    if (e.key === ' ') {
+      e.preventDefault();
+      if (currentPosition < expectedText.length) {
+        const expected = expectedText[currentPosition];
+        const isCorrect = e.key === expected;
+        
+        if (isCorrect) {
+          setCorrectCharacters(prev => prev + 1);
+          setAnalytics_correctCharsSoFar(prev => prev + 1);
+        } else {
+          setMissedCharacters(prev => ({
+            ...prev,
+            [expected]: (prev[expected] || 0) + 1
+          }));
+        }
+        
+        setTotalTypedCharacters(prev => prev + 1);
+        setCurrentPosition(prev => prev + 1);
+        
+        const newTyped = [...typedCharacters];
+        newTyped[currentPosition] = e.key;
+        setTypedCharacters(newTyped);
+        
+        const newStatus = [...characterStatus];
+        newStatus[currentPosition] = isCorrect ? 'correct' : 'incorrect';
+        setCharacterStatus(newStatus);
+      }
+      return;
+    }
+    
+    // Handle regular characters
+    if (e.key.length === 1) {
+      e.preventDefault();
+      
+      if (currentPosition < expectedText.length) {
+        const expected = expectedText[currentPosition];
+        const isCorrect = e.key === expected;
+        
+        if (isCorrect) {
+          setCorrectCharacters(prev => prev + 1);
+          setAnalytics_correctCharsSoFar(prev => prev + 1);
+        } else {
+          setMissedCharacters(prev => ({
+            ...prev,
+            [expected]: (prev[expected] || 0) + 1
+          }));
+        }
+        
+        setTotalTypedCharacters(prev => prev + 1);
+        setCurrentPosition(prev => prev + 1);
+        
+        const newTyped = [...typedCharacters];
+        newTyped[currentPosition] = e.key;
+        setTypedCharacters(newTyped);
+        
+        const newStatus = [...characterStatus];
+        newStatus[currentPosition] = isCorrect ? 'correct' : 'incorrect';
+        setCharacterStatus(newStatus);
+      } else {
+        // Extra character beyond text length
+        setTotalTypedCharacters(prev => prev + 1);
+        setCurrentPosition(prev => prev + 1);
+        
+        const newTyped = [...typedCharacters];
+        newTyped[currentPosition] = e.key;
+        setTypedCharacters(newTyped);
+        
+        const newStatus = [...characterStatus];
+        newStatus[currentPosition] = 'extra';
+        setCharacterStatus(newStatus);
+      }
+      
+      // Log keystroke
+      const keystrokeData: KeystrokeData = {
+        key: e.key,
+        keyId: e.code,
+        correct: e.key === expectedText[currentPosition],
+        timestamp,
+        position: currentPosition
+      };
+      setKeystrokeLog(prev => [...prev, keystrokeData]);
+      
+      // Update WPM timeline
+      const elapsedSeconds = Math.floor(timestamp);
+      if (elapsedSeconds > 0) {
+        const wpm = (analytics_correctCharsSoFar / 5) / (elapsedSeconds / 60);
+        setAnalytics_wpmTimeline(prev => {
+          const newTimeline = [...prev];
+          const existingIndex = newTimeline.findIndex(point => point.second === elapsedSeconds);
+          if (existingIndex >= 0) {
+            newTimeline[existingIndex] = { second: elapsedSeconds, wpm };
+          } else {
+            newTimeline.push({ second: elapsedSeconds, wpm });
+          }
+          return newTimeline;
+        });
+      }
+    }
+  }, [isTestActive, isCountingDown, testSettings.mode, currentPosition, expectedText, firstKeystrokeTime, testStartTime, typedCharacters, characterStatus, analytics_correctCharsSoFar, handleBackspace]);
 
   // Handle Zen content changes
   const handleZenContentChange = useCallback((content: string) => {
@@ -415,6 +530,11 @@ export const TypingTest = () => {
       setLiveWPM(wpm);
     }
   }, [firstKeystrokeTime, testStartTime]);
+
+  // Handle Zen manual end
+  const handleZenManualEnd = useCallback(() => {
+    endTest();
+  }, [endTest]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-900 via-blue-900 to-green-900 p-4">
