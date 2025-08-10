@@ -1,0 +1,1513 @@
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { Card, CardContent } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { TypingArea } from './TypingArea';
+import { TestConfig } from './TestConfig';
+import { paragraphRotator, TextParagraph } from '@/lib/textData';
+import { exportToCSV, exportToJSON, calculateCharactersPerSecond, ExportData } from '@/lib/exportUtils';
+import { calculateBehavioralMetrics } from '@/lib/behavioralMetrics';
+import { analyzeTypingPersona, getPersonaInsights, TypingPersona } from '@/lib/typingPersonas';
+import { saveSession, type SessionData } from '@/lib/sessionStorage';
+import { SessionHistory } from './SessionHistory';
+
+export interface TestSettings {
+  duration: number;
+  textType: 'sentences' | 'quotes' | 'code';
+}
+
+export interface KeystrokeData {
+  key: string;
+  correct: boolean;
+  timestamp: number;
+  position: number;
+}
+
+export interface ResultsData {
+  totalCharacters: number;
+  correctCharacters: number;
+  incorrectCharacters: number;
+  accuracy: number;
+  backspaceCount: number;
+  keystrokeDelayAverage: number;
+  maxDelaySpike: number;
+  wpmOverTime: number[];
+  finalWPM: number;
+  typingConsistencyScore: number;
+  fatigueScore: number;
+  reactionDelay: number;
+  topErrorHotspots: { second: number; count: number }[];
+  topBackspaceHotspots: { second: number; count: number }[];
+}
+
+export interface Insight {
+  type: 'positive' | 'improvement' | 'warning';
+  message: string;
+  icon?: string;
+}
+
+
+
+export interface TypingSession {
+  id: string;
+  timestamp: number;
+  date: string;
+  testSettings: TestSettings;
+  resultsData: ResultsData;
+  insights: Insight[];
+  keystrokeLog: KeystrokeData[];
+  missedCharacters: { [key: string]: number };
+  typingPersona: TypingPersona;
+}
+
+export interface SessionSummary {
+  id: string;
+  timestamp: number;
+  date: string;
+  wpm: number;
+  accuracy: number;
+  duration: number;
+  textType: string;
+  personaType: string;
+}
+
+export const TypingTest = () => {
+  // Test state
+  const [testSettings, setTestSettings] = useState<TestSettings>({ duration: 30, textType: 'sentences' });
+  const [isTestActive, setIsTestActive] = useState(false);
+  const [expectedText, setExpectedText] = useState('');
+  const [currentPosition, setCurrentPosition] = useState(0);
+  const [typedCharacters, setTypedCharacters] = useState<string[]>([]);
+  const [characterStatus, setCharacterStatus] = useState<('correct' | 'incorrect' | '')[]>([]);
+  
+  // Timer state
+  const [timeRemaining, setTimeRemaining] = useState(0);
+  const [testStartTime, setTestStartTime] = useState<number | null>(null);
+  const [countdown, setCountdown] = useState<number | null>(null);
+  const [isCountingDown, setIsCountingDown] = useState(false);
+  
+  // Statistics
+  const [correctCharacters, setCorrectCharacters] = useState(0);
+  const [totalTypedCharacters, setTotalTypedCharacters] = useState(0);
+  const [backspaces, setBackspaces] = useState(0);
+  const [missedCharacters, setMissedCharacters] = useState<{ [key: string]: number }>({});
+  const [wpmHistory, setWpmHistory] = useState<number[]>([]);
+  
+  // Results state
+  const [showResults, setShowResults] = useState(false);
+  const [finalWPM, setFinalWPM] = useState(0);
+  const [finalAccuracy, setFinalAccuracy] = useState(0);
+  const [resultsData, setResultsData] = useState<ResultsData | null>(null);
+  const [exportData, setExportData] = useState<ExportData | null>(null);
+  const [typingPersona, setTypingPersona] = useState<TypingPersona | null>(null);
+  const [personaInsights, setPersonaInsights] = useState<string[]>([]);
+  
+  // Historical session state
+  const [selectedSession, setSelectedSession] = useState<SessionData | null>(null);
+  const [showHistoricalResults, setShowHistoricalResults] = useState(false);
+  
+  // Keystroke tracking
+  const [keystrokeLog, setKeystrokeLog] = useState<KeystrokeData[]>([]);
+  
+  // Refs for cleanup
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const wpmTrackerRef = useRef<NodeJS.Timeout | null>(null);
+  const testEndedRef = useRef(false);
+  const endTestRef = useRef<(() => void) | null>(null);
+
+  // Get next paragraph
+  const getNextParagraph = useCallback(() => {
+    return paragraphRotator.getNextParagraph(testSettings.textType);
+  }, [testSettings.textType]);
+
+  // Reset paragraph rotation
+  const resetParagraphRotation = useCallback(() => {
+    paragraphRotator.reset();
+  }, []);
+
+  // Process keystroke analytics
+  const processKeystrokeAnalytics = useCallback((keystrokes: KeystrokeData[], testDurationMinutes: number): ResultsData => {
+    const characterKeystrokes = keystrokes.filter(k => k.key !== 'Backspace');
+    const backspaceKeystrokes = keystrokes.filter(k => k.key === 'Backspace');
+    
+    const totalCharacters = characterKeystrokes.length;
+    const correctCharacters = characterKeystrokes.filter(k => k.correct).length;
+    const incorrectCharacters = characterKeystrokes.filter(k => !k.correct).length;
+    const backspaceCount = backspaceKeystrokes.length;
+    const accuracy = totalCharacters > 0 ? (correctCharacters / totalCharacters) * 100 : 0;
+    const finalWPM = testDurationMinutes > 0 ? (correctCharacters / 5) / testDurationMinutes : 0;
+    
+    // Calculate WPM over time
+    const wpmOverTime: number[] = [];
+    const testDurationSeconds = Math.floor(testDurationMinutes * 60);
+    
+    for (let second = 1; second <= testDurationSeconds; second++) {
+      const correctCharsUpToSecond = characterKeystrokes
+        .filter(k => k.timestamp <= second && k.correct)
+        .length;
+      
+      const wpm = second > 0 ? (correctCharsUpToSecond / 5) / (second / 60) : 0;
+      wpmOverTime.push(wpm);
+    }
+    
+    // Calculate behavioral metrics
+    const behavioralMetrics = calculateBehavioralMetrics(keystrokes, wpmOverTime, testDurationSeconds);
+    
+    return {
+      totalCharacters,
+      correctCharacters,
+      incorrectCharacters,
+      accuracy,
+      backspaceCount,
+      keystrokeDelayAverage: 0,
+      maxDelaySpike: 0,
+      wpmOverTime,
+      finalWPM,
+      typingConsistencyScore: behavioralMetrics.typingConsistencyScore,
+      fatigueScore: behavioralMetrics.fatigueScore,
+      reactionDelay: behavioralMetrics.reactionDelay,
+      topErrorHotspots: behavioralMetrics.topErrorHotspots,
+      topBackspaceHotspots: behavioralMetrics.topBackspaceHotspots
+    };
+  }, []);
+
+  // Start the test
+  const startTest = useCallback(() => {
+    const paragraph = getNextParagraph();
+    setExpectedText(paragraph.text);
+    setCurrentPosition(0);
+    setTypedCharacters(new Array(paragraph.text.length).fill(''));
+    setCharacterStatus(new Array(paragraph.text.length).fill(''));
+    setCorrectCharacters(0);
+    setTotalTypedCharacters(0);
+    setBackspaces(0);
+    setMissedCharacters({});
+    setWpmHistory([]);
+    setTimeRemaining(testSettings.duration);
+    setTestStartTime(null);
+    setIsTestActive(true);
+    setShowResults(false);
+    setShowHistoricalResults(false);
+    setSelectedSession(null);
+    setFinalWPM(0);
+    setFinalAccuracy(0);
+    setResultsData(null);
+    setExportData(null);
+    setTypingPersona(null);
+    setPersonaInsights([]);
+    setKeystrokeLog([]);
+    testEndedRef.current = false;
+    
+    if (timerRef.current) clearInterval(timerRef.current);
+    if (wpmTrackerRef.current) clearInterval(wpmTrackerRef.current);
+    
+    // Start countdown
+    setIsCountingDown(true);
+    setCountdown(3);
+    
+    const countdownInterval = setInterval(() => {
+      setCountdown(prev => {
+        if (prev === null || prev <= 1) {
+          clearInterval(countdownInterval);
+          setIsCountingDown(false);
+          setCountdown(null);
+          // Start the actual test timer
+          const startTime = Date.now();
+          setTestStartTime(startTime);
+          
+          let timeLeft = testSettings.duration;
+          timerRef.current = setInterval(() => {
+            timeLeft--;
+            setTimeRemaining(timeLeft);
+
+            if (timeLeft <= 0) {
+              clearInterval(timerRef.current!);
+              timerRef.current = null;
+              if (endTestRef.current) {
+                endTestRef.current();
+              }
+            }
+          }, 1000);
+          
+          wpmTrackerRef.current = setInterval(() => {
+            const elapsed = (Date.now() - startTime) / 60000;
+            const currentWPM = elapsed > 0 ? (correctCharacters / 5) / elapsed : 0;
+            setWpmHistory(prev => [...prev, currentWPM]);
+          }, 1000);
+          return null;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  }, [testSettings.duration, getNextParagraph, correctCharacters]);
+
+  // End test function
+  const endTest = useCallback(() => {
+    if (testEndedRef.current) return;
+    testEndedRef.current = true;
+
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+    if (wpmTrackerRef.current) {
+      clearInterval(wpmTrackerRef.current);
+      wpmTrackerRef.current = null;
+    }
+
+    const endTime = Date.now();
+    const testDurationMs = testStartTime ? endTime - testStartTime : testSettings.duration * 1000;
+    const testDurationMinutes = testDurationMs / 60000;
+    
+    const finalWPMValue = testDurationMinutes > 0 ? (correctCharacters / 5) / testDurationMinutes : 0;
+    const finalAccuracyValue = totalTypedCharacters > 0 ? (correctCharacters / totalTypedCharacters) * 100 : 0;
+    
+    const analytics = processKeystrokeAnalytics(keystrokeLog, testDurationMinutes);
+    
+    // Calculate typing persona
+    const personaData = {
+      finalWPM: finalWPMValue,
+      accuracy: finalAccuracyValue,
+      consistencyScore: analytics.typingConsistencyScore,
+      fatigueScore: analytics.fatigueScore,
+      backspaceCount: backspaces,
+      reactionDelay: analytics.reactionDelay,
+      wpmOverTime: analytics.wpmOverTime
+    };
+    
+    const persona = analyzeTypingPersona(personaData);
+    const insights = getPersonaInsights(persona, personaData);
+    
+    // Prepare export data
+    const charactersPerSecond = calculateCharactersPerSecond(keystrokeLog, testSettings.duration);
+    const exportDataValue: ExportData = {
+      finalWPM: finalWPMValue,
+      accuracy: finalAccuracyValue,
+      totalBackspaces: backspaces,
+      wpmOverTime: analytics.wpmOverTime,
+      charactersPerSecond,
+      commonlyMistypedCharacters: missedCharacters,
+      testStartTime: testStartTime || endTime - testSettings.duration * 1000,
+      testEndTime: endTime,
+      testDuration: testSettings.duration,
+      totalCharacters: totalTypedCharacters,
+      correctCharacters,
+      incorrectCharacters: totalTypedCharacters - correctCharacters,
+      textType: testSettings.textType,
+      keystrokeLog,
+      // Behavioral metrics
+      typingConsistencyScore: analytics.typingConsistencyScore,
+      fatigueScore: analytics.fatigueScore,
+      reactionDelay: analytics.reactionDelay,
+      topErrorHotspots: analytics.topErrorHotspots,
+      topBackspaceHotspots: analytics.topBackspaceHotspots,
+      // Typing persona
+      typingPersona: persona,
+      personaInsights: insights
+    };
+    
+    setFinalWPM(Math.round(finalWPMValue));
+    setFinalAccuracy(parseFloat(finalAccuracyValue.toFixed(2)));
+    setResultsData(analytics);
+    setExportData(exportDataValue);
+    // Save session to localStorage
+    console.log('TypingTest: Saving session with WPM:', finalWPMValue, 'Accuracy:', finalAccuracyValue, 'Persona:', persona.name);
+    saveSession(
+      finalWPMValue, 
+      finalAccuracyValue, 
+      persona.name,
+      backspaces,
+      totalTypedCharacters,
+      correctCharacters,
+      totalTypedCharacters - correctCharacters,
+      testSettings.duration,
+      testSettings.textType,
+      wpmHistory,
+      analytics.typingConsistencyScore,
+      analytics.fatigueScore,
+      analytics.reactionDelay,
+      analytics.topErrorHotspots,
+      analytics.topBackspaceHotspots,
+      missedCharacters,
+      insights
+    );
+
+    setTypingPersona(persona);
+    setPersonaInsights(insights);
+    setShowResults(true);
+    setIsTestActive(false);
+    
+  }, [testStartTime, testSettings.duration, correctCharacters, totalTypedCharacters, keystrokeLog, processKeystrokeAnalytics]);
+
+  // Store the endTest function in a ref
+  endTestRef.current = endTest;
+
+  // Generate results summary
+  const generateResultsSummary = (wpm: number, accuracy: number, backspaces: number, wpmHistory: number[], consistencyScore: number) => {
+    let summary = '';
+    
+    // WPM performance assessment
+    if (wpm >= 80) {
+      summary += `Excellent typing speed of ${wpm} WPM! `;
+    } else if (wpm >= 60) {
+      summary += `Good typing speed of ${wpm} WPM. `;
+    } else if (wpm >= 40) {
+      summary += `Moderate typing speed of ${wpm} WPM. `;
+    } else {
+      summary += `Your typing speed of ${wpm} WPM has room for improvement. `;
+    }
+    
+    // Accuracy assessment
+    if (accuracy >= 98) {
+      summary += `Your accuracy of ${accuracy.toFixed(1)}% is outstanding. `;
+    } else if (accuracy >= 95) {
+      summary += `Your accuracy of ${accuracy.toFixed(1)}% is very good. `;
+    } else if (accuracy >= 90) {
+      summary += `Your accuracy of ${accuracy.toFixed(1)}% is good. `;
+    } else {
+      summary += `Your accuracy of ${accuracy.toFixed(1)}% could be improved. `;
+    }
+    
+    // Backspace usage
+    const backspaceRate = backspaces / Math.max(1, totalTypedCharacters) * 100;
+    if (backspaceRate <= 2) {
+      summary += `You used backspace sparingly (${backspaces} times), showing good typing confidence. `;
+    } else if (backspaceRate <= 5) {
+      summary += `You used backspace ${backspaces} times, which is reasonable. `;
+    } else {
+      summary += `You used backspace ${backspaces} times, which suggests you might benefit from slowing down slightly for better accuracy. `;
+    }
+    
+    // WPM trends
+    if (wpmHistory.length > 3) {
+      const firstHalf = wpmHistory.slice(0, Math.floor(wpmHistory.length / 2));
+      const secondHalf = wpmHistory.slice(Math.floor(wpmHistory.length / 2));
+      const firstAvg = firstHalf.reduce((a, b) => a + b, 0) / firstHalf.length;
+      const secondAvg = secondHalf.reduce((a, b) => a + b, 0) / secondHalf.length;
+      
+      if (secondAvg > firstAvg * 1.1) {
+        summary += `You showed improvement throughout the test, with your speed increasing as you got comfortable. `;
+      } else if (secondAvg < firstAvg * 0.9) {
+        summary += `Your speed decreased slightly during the test, possibly due to fatigue or challenging text. `;
+      } else {
+        summary += `You maintained consistent speed throughout the test. `;
+      }
+    }
+    
+    // Consistency assessment
+    if (consistencyScore >= 80) {
+      summary += `Your typing consistency is excellent, indicating good rhythm and flow.`;
+    } else if (consistencyScore >= 60) {
+      summary += `Your typing consistency is good, with room for minor improvements.`;
+    } else {
+      summary += `Your typing consistency could be improved by maintaining a more steady rhythm.`;
+    }
+    
+    return summary;
+  };
+
+  // Display historical session results
+  const displayHistoricalResults = (session: SessionData) => {
+    setSelectedSession(session);
+    setShowHistoricalResults(true);
+    setShowResults(false); // Hide current results if showing historical ones
+  };
+
+  // Clear historical results and show current test interface
+  const clearHistoricalResults = () => {
+    setSelectedSession(null);
+    setShowHistoricalResults(false);
+    setShowResults(false);
+  };
+
+  // Generate hotspot summary
+  const generateHotspotSummary = (errorHotspots: { second: number; count: number }[], backspaceHotspots: { second: number; count: number }[]) => {
+    const totalErrors = errorHotspots.reduce((sum, { count }) => sum + count, 0);
+    const totalBackspaces = backspaceHotspots.reduce((sum, { count }) => sum + count, 0);
+    
+    if (totalErrors === 0 && totalBackspaces === 0) {
+      return "No significant error or backspace patterns detected during this test.";
+    }
+    
+    let summary = `Total errors: ${totalErrors}, Total backspaces: ${totalBackspaces}. `;
+    
+    // Find the most problematic time range
+    const allHotspots = [
+      ...errorHotspots.map(h => ({ ...h, type: 'error' as const })),
+      ...backspaceHotspots.map(h => ({ ...h, type: 'backspace' as const }))
+    ].sort((a, b) => a.second - b.second);
+    
+    if (allHotspots.length > 0) {
+      const maxCount = Math.max(...allHotspots.map(h => h.count));
+      const problematicSeconds = allHotspots.filter(h => h.count === maxCount);
+      
+      if (problematicSeconds.length === 1) {
+        const hotspot = problematicSeconds[0];
+        summary += `Most ${hotspot.type === 'error' ? 'mistakes' : 'corrections'} occurred at second ${hotspot.second}.`;
+      } else {
+        const minSecond = Math.min(...problematicSeconds.map(h => h.second));
+        const maxSecond = Math.max(...problematicSeconds.map(h => h.second));
+        if (minSecond === maxSecond) {
+          summary += `Most issues occurred at second ${minSecond}.`;
+        } else {
+          summary += `Most issues occurred between seconds ${minSecond}–${maxSecond}.`;
+        }
+      }
+    }
+    
+    return summary;
+  };
+
+  // Create WPM chart data
+  const createWPMChartData = (wpmHistory: number[]) => {
+    return wpmHistory.map((wpm, index) => ({
+      second: index + 1,
+      wpm: Math.round(wpm * 10) / 10
+    }));
+  };
+
+  // Timer function
+  const startTimer = useCallback(() => {
+    const startTime = Date.now();
+    setTestStartTime(startTime);
+    
+    let timeLeft = testSettings.duration;
+    timerRef.current = setInterval(() => {
+      timeLeft--;
+      setTimeRemaining(timeLeft);
+
+      if (timeLeft <= 0) {
+        clearInterval(timerRef.current!);
+        timerRef.current = null;
+        if (endTestRef.current) {
+          endTestRef.current();
+        }
+      }
+    }, 1000);
+    
+    wpmTrackerRef.current = setInterval(() => {
+      const elapsed = (Date.now() - startTime) / 60000;
+      const currentWPM = elapsed > 0 ? (correctCharacters / 5) / elapsed : 0;
+      setWpmHistory(prev => [...prev, currentWPM]);
+    }, 1000);
+  }, [testSettings.duration, correctCharacters]);
+
+  // Handle keystroke
+  const handleKeystroke = useCallback((key: string) => {
+    if (!isTestActive || currentPosition >= expectedText.length || isCountingDown) {
+      return;
+    }
+    
+    const expected = expectedText[currentPosition];
+    const isCorrect = key === expected;
+    const timestamp = testStartTime ? (Date.now() - testStartTime) / 1000 : 0;
+    
+    const keystrokeData: KeystrokeData = {
+      key,
+      correct: isCorrect,
+      timestamp,
+      position: currentPosition
+    };
+    
+    setKeystrokeLog(prev => [...prev, keystrokeData]);
+    
+    setCharacterStatus(prev => {
+      const newStatus = [...prev];
+      newStatus[currentPosition] = isCorrect ? 'correct' : 'incorrect';
+      return newStatus;
+    });
+    
+    setTypedCharacters(prev => {
+      const newTyped = [...prev];
+      newTyped[currentPosition] = key;
+      return newTyped;
+    });
+    
+    if (isCorrect) {
+      setCorrectCharacters(prev => prev + 1);
+    } else {
+      setMissedCharacters(prev => ({
+        ...prev,
+        [expected]: (prev[expected] || 0) + 1
+      }));
+    }
+    
+    setTotalTypedCharacters(prev => prev + 1);
+    setCurrentPosition(prev => prev + 1);
+  }, [isTestActive, currentPosition, expectedText, testStartTime, startTimer]);
+
+  // Handle backspace
+  const handleBackspace = useCallback(() => {
+    if (!isTestActive || currentPosition === 0) {
+      return;
+    }
+    
+    setBackspaces(prev => prev + 1);
+    
+    const previousChar = typedCharacters[currentPosition - 1];
+    const expectedChar = expectedText[currentPosition - 1];
+    const wasCorrect = previousChar === expectedChar;
+    
+    const timestamp = testStartTime ? (Date.now() - testStartTime) / 1000 : 0;
+    
+    const backspaceData: KeystrokeData = {
+      key: 'Backspace',
+      correct: true,
+      timestamp,
+      position: currentPosition - 1
+    };
+    
+    setKeystrokeLog(prev => [...prev, backspaceData]);
+    
+    setCharacterStatus(prev => {
+      const newStatus = [...prev];
+      newStatus[currentPosition - 1] = '';
+      return newStatus;
+    });
+    
+    setTypedCharacters(prev => {
+      const newTyped = [...prev];
+      newTyped[currentPosition - 1] = '';
+      return newTyped;
+    });
+    
+    if (wasCorrect) {
+      setCorrectCharacters(prev => prev - 1);
+    }
+    
+    setTotalTypedCharacters(prev => prev - 1);
+    setCurrentPosition(prev => prev - 1);
+  }, [isTestActive, currentPosition, typedCharacters, expectedText, testStartTime]);
+
+  // Handle key events
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (!isTestActive) return;
+    
+    e.preventDefault();
+    
+    if (e.key === 'Backspace') {
+      handleBackspace();
+    } else if (e.key.length === 1) {
+      handleKeystroke(e.key);
+    }
+  }, [isTestActive, handleBackspace, handleKeystroke]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+      if (wpmTrackerRef.current) clearInterval(wpmTrackerRef.current);
+    };
+  }, []);
+
+  return (
+    <div className="min-h-screen bg-background p-4">
+      <div className="max-w-4xl mx-auto space-y-6">
+        {/* Header */}
+        <div className="text-center space-y-2">
+          <h1 className="text-3xl font-bold text-foreground">Type Flow Forge</h1>
+          <p className="text-muted-foreground">Test your typing speed and accuracy</p>
+        </div>
+
+        {!isTestActive ? (
+          /* Test Configuration */
+          <Card className="mx-auto max-w-md">
+            <CardContent className="p-6 space-y-6">
+              <TestConfig settings={testSettings} onSettingsChange={setTestSettings} />
+              <Button onClick={startTest} className="w-full" size="lg">
+                Start Test
+              </Button>
+            </CardContent>
+          </Card>
+        ) : (
+          /* Active Test */
+          <div className="space-y-6 fade-up">
+            {/* Timer */}
+            <Card className="bg-white border border-blue-200">
+              <CardContent className="p-6">
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="text-xl font-semibold text-blue-900">
+                    {isCountingDown ? 'Get Ready!' : 'Time Remaining'}
+                  </h2>
+                  <div className="text-2xl font-bold text-blue-600">
+                    {isCountingDown ? (
+                      <span className="text-3xl text-orange-600 animate-pulse">{countdown}</span>
+                    ) : (
+                      `${Math.floor(timeRemaining / 60).toString().padStart(2, '0')}:${(timeRemaining % 60).toString().padStart(2, '0')}`
+                    )}
+                  </div>
+                </div>
+                
+                {/* Progress bar */}
+                {!isCountingDown && (
+                  <div className="w-full bg-blue-100 rounded-full h-2">
+                    <div 
+                      className="bg-blue-600 h-2 rounded-full transition-all duration-1000 ease-linear"
+                      style={{ width: `${((testSettings.duration - timeRemaining) / testSettings.duration) * 100}%` }}
+                    />
+                  </div>
+                )}
+                
+                {/* Countdown message */}
+                {isCountingDown && (
+                  <div className="text-center py-4">
+                    <p className="text-gray-600 text-lg">Test will begin in...</p>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+            
+            {/* Typing Area */}
+            <TypingArea
+              expectedText={expectedText}
+              currentPosition={currentPosition}
+              characterStatus={characterStatus}
+              typedCharacters={typedCharacters}
+              onKeyDown={handleKeyDown}
+              isActive={isTestActive}
+            />
+            
+            {/* Live WPM Chart */}
+            {!isCountingDown && wpmHistory.length > 0 && (
+              <Card className="bg-white border border-blue-200">
+                <CardContent className="p-6">
+                  <h3 className="text-lg font-semibold text-blue-900 mb-4">📈 Live WPM</h3>
+                  <div className="h-32 relative">
+                    <div className="absolute inset-0 flex items-end justify-between">
+                      {wpmHistory.map((wpm, index) => {
+                        const maxWPM = Math.max(...wpmHistory.filter(w => w > 0));
+                        const height = maxWPM > 0 ? (wpm / maxWPM) * 100 : 0;
+                        
+                        return (
+                          <div 
+                            key={index}
+                            className="flex-1 mx-0.5 relative group"
+                            style={{ height: '100%' }}
+                          >
+                            <div 
+                              className={`w-full transition-all duration-300 rounded-t ${
+                                wpm === 0 ? 'bg-gray-300' : 'bg-blue-500'
+                              } hover:opacity-80`}
+                              style={{ height: `${Math.max(height, 2)}%` }}
+                            >
+                              <div className="absolute -top-8 left-1/2 transform -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity bg-gray-800 text-white text-xs px-2 py-1 rounded whitespace-nowrap">
+                                {wpm.toFixed(1)} WPM
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {/* Y-axis labels */}
+                    <div className="absolute left-0 top-0 h-full flex flex-col justify-between text-xs text-gray-500 pr-2">
+                      {(() => {
+                        const maxWPM = Math.max(...wpmHistory.filter(w => w > 0));
+                        if (maxWPM === 0) return null;
+                        return [maxWPM, maxWPM * 0.75, maxWPM * 0.5, maxWPM * 0.25, 0].map((value, index) => (
+                          <div key={index} className="flex items-center">
+                            <span>{value.toFixed(0)}</span>
+                            <div className="ml-2 w-8 h-px bg-gray-300"></div>
+                          </div>
+                        ));
+                      })()}
+                    </div>
+                    {/* X-axis labels */}
+                    <div className="absolute bottom-0 left-0 right-0 flex justify-between text-xs text-gray-500 pt-2">
+                      {wpmHistory.map((_, index) => (
+                        <span key={index} className="flex-1 text-center">
+                          {index + 1}s
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+            
+            {/* Manual End Button */}
+            <div className="text-center">
+              <Button 
+                variant="outline" 
+                onClick={() => endTestRef.current && endTestRef.current()}
+                className="text-blue-600 border-blue-300 hover:bg-blue-50 hover:text-blue-700"
+              >
+                End Test Early
+              </Button>
+            </div>
+          </div>
+        )}
+        
+        {/* Results */}
+        {showResults && (
+          <div className="bg-gray-50 p-6 rounded-lg">
+            <div className="max-w-4xl mx-auto">
+              <h2 className="text-3xl font-bold text-blue-900 mb-6 text-center">Test Results</h2>
+              
+              {/* Main Stats */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                <div className="bg-white p-6 rounded-lg border border-blue-200 shadow-sm text-center">
+                  <div className="text-4xl font-bold text-blue-600 mb-2">
+                    {finalWPM.toFixed(1)}
+                  </div>
+                  <div className="text-gray-600 uppercase tracking-wide text-sm font-medium">Words Per Minute</div>
+                </div>
+                
+                <div className="bg-white p-6 rounded-lg border border-blue-200 shadow-sm text-center">
+                  <div className="text-4xl font-bold text-blue-600 mb-2">
+                    {finalAccuracy.toFixed(1)}%
+                  </div>
+                  <div className="text-gray-600 uppercase tracking-wide text-sm font-medium">Accuracy</div>
+                </div>
+                
+                <div className="bg-white p-6 rounded-lg border border-blue-200 shadow-sm text-center">
+                  <div className="text-4xl font-bold text-blue-600 mb-2">
+                    {backspaces}
+                  </div>
+                  <div className="text-gray-600 uppercase tracking-wide text-sm font-medium">Backspaces</div>
+                </div>
+              </div>
+
+              {/* Results Summary */}
+              {resultsData && (
+                <div className="bg-gradient-to-r from-blue-50 to-indigo-50 p-6 rounded-lg border border-blue-200 shadow-sm mb-8">
+                  <h3 className="text-xl font-semibold text-blue-900 mb-4">📊 Performance Summary</h3>
+                  <p className="text-gray-700 leading-relaxed text-lg">
+                    {generateResultsSummary(
+                      finalWPM, 
+                      finalAccuracy, 
+                      backspaces, 
+                      wpmHistory, 
+                      resultsData.typingConsistencyScore
+                    )}
+                  </p>
+                </div>
+              )}
+
+              {/* WPM Over Time Chart */}
+              {wpmHistory.length > 0 && (
+                <div className="bg-white p-6 rounded-lg border border-blue-200 shadow-sm mb-6">
+                  <h3 className="text-xl font-semibold text-blue-900 mb-4">📈 WPM Over Time</h3>
+                  <div className="h-64 relative">
+                    <div className="absolute inset-0 flex items-end justify-between">
+                      {wpmHistory.map((wpm, index) => {
+                        const maxWPM = Math.max(...wpmHistory.filter(w => w > 0));
+                        const height = maxWPM > 0 ? (wpm / maxWPM) * 100 : 0;
+                        const isPeak = wpm === maxWPM;
+                        const isDrop = index > 0 && wpm > 0 && wpmHistory[index - 1] > 0 && wpm < wpmHistory[index - 1] * 0.8;
+                        
+                        return (
+                          <div 
+                            key={index}
+                            className="flex-1 mx-0.5 relative group"
+                            style={{ height: '100%' }}
+                          >
+                            <div 
+                              className={`w-full transition-all duration-300 rounded-t ${
+                                wpm === 0 ? 'bg-gray-300' :
+                                isPeak ? 'bg-green-500' : 
+                                isDrop ? 'bg-red-500' : 'bg-blue-500'
+                              } hover:opacity-80`}
+                              style={{ height: `${Math.max(height, 2)}%` }}
+                            >
+                              <div className="absolute -top-8 left-1/2 transform -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity bg-gray-800 text-white text-xs px-2 py-1 rounded whitespace-nowrap">
+                                {wpm.toFixed(1)} WPM
+                              </div>
+                            </div>
+                            {isPeak && (
+                              <div className="absolute -top-12 left-1/2 transform -translate-x-1/2 bg-green-600 text-white text-xs px-2 py-1 rounded">
+                                Peak: {wpm.toFixed(1)}
+                              </div>
+                            )}
+                            {isDrop && (
+                              <div className="absolute -top-12 left-1/2 transform -translate-x-1/2 bg-red-600 text-white text-xs px-2 py-1 rounded">
+                                Drop: {wpm.toFixed(1)}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {/* Y-axis labels */}
+                    <div className="absolute left-0 top-0 h-full flex flex-col justify-between text-xs text-gray-500 pr-2">
+                      {(() => {
+                        const maxWPM = Math.max(...wpmHistory.filter(w => w > 0));
+                        if (maxWPM === 0) return null;
+                        return [maxWPM, maxWPM * 0.75, maxWPM * 0.5, maxWPM * 0.25, 0].map((value, index) => (
+                          <div key={index} className="flex items-center">
+                            <span>{value.toFixed(0)}</span>
+                            <div className="ml-2 w-8 h-px bg-gray-300"></div>
+                          </div>
+                        ));
+                      })()}
+                    </div>
+                    {/* X-axis labels */}
+                    <div className="absolute bottom-0 left-0 right-0 flex justify-between text-xs text-gray-500 pt-2">
+                      {wpmHistory.map((_, index) => (
+                        <span key={index} className="flex-1 text-center">
+                          {index + 1}s
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="mt-4 flex justify-center space-x-6 text-sm">
+                    <div className="flex items-center">
+                      <div className="w-3 h-3 bg-blue-500 rounded mr-2"></div>
+                      <span>Normal</span>
+                    </div>
+                    <div className="flex items-center">
+                      <div className="w-3 h-3 bg-green-500 rounded mr-2"></div>
+                      <span>Peak</span>
+                    </div>
+                    <div className="flex items-center">
+                      <div className="w-3 h-3 bg-red-500 rounded mr-2"></div>
+                      <span>Drop</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Typing Persona */}
+              {typingPersona && (
+                <div className="bg-gradient-to-r from-blue-50 to-purple-50 p-6 rounded-lg border-2 border-blue-200 shadow-lg mb-6">
+                  <div className="text-center mb-4">
+                    <div className="text-6xl mb-2">{typingPersona.icon}</div>
+                    <h3 className="text-2xl font-bold text-blue-900 mb-2">{typingPersona.title}</h3>
+                    <p className="text-gray-700 text-lg leading-relaxed max-w-2xl mx-auto">
+                      {typingPersona.description}
+                    </p>
+                  </div>
+                  
+                  {/* Persona Traits */}
+                  <div className="flex flex-wrap justify-center gap-2 mb-4">
+                    {typingPersona.traits.map((trait, index) => (
+                      <span 
+                        key={index}
+                        className="px-3 py-1 bg-white bg-opacity-70 rounded-full text-sm font-medium text-blue-800 border border-blue-200"
+                      >
+                        {trait}
+                      </span>
+                    ))}
+                  </div>
+                  
+                  {/* Persona Insights */}
+                  {personaInsights.length > 0 && (
+                    <div className="bg-white bg-opacity-50 rounded-lg p-4">
+                      <h4 className="text-lg font-semibold text-blue-900 mb-3">💡 Insights for You</h4>
+                      <ul className="space-y-2">
+                        {personaInsights.map((insight, index) => (
+                          <li key={index} className="flex items-start">
+                            <span className="text-blue-600 mr-2">•</span>
+                            <span className="text-gray-700">{insight}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Detailed Stats */}
+              {resultsData && (
+                <div className="bg-white p-6 rounded-lg border border-blue-200 shadow-sm mb-6">
+                  <h3 className="text-xl font-semibold text-blue-900 mb-4">Detailed Statistics</h3>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                    <div>
+                      <span className="text-gray-600">Total Characters:</span>
+                      <div className="font-semibold text-blue-700">{resultsData.totalCharacters}</div>
+                    </div>
+                    <div>
+                      <span className="text-gray-600">Correct Characters:</span>
+                      <div className="font-semibold text-green-600">{resultsData.correctCharacters}</div>
+                    </div>
+                    <div>
+                      <span className="text-gray-600">Incorrect Characters:</span>
+                      <div className="font-semibold text-red-600">{resultsData.incorrectCharacters}</div>
+                    </div>
+                    <div>
+                      <span className="text-gray-600">Test Duration:</span>
+                      <div className="font-semibold text-blue-700">{testSettings.duration}s</div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Behavioral Metrics */}
+              {resultsData && (
+                <div className="bg-white p-6 rounded-lg border border-blue-200 shadow-sm mb-6">
+                  <h3 className="text-xl font-semibold text-blue-900 mb-4">Behavioral Analysis</h3>
+                  
+                  {/* Behavioral Metrics Grid */}
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                    <div className="text-center p-4 bg-blue-50 rounded-lg border border-blue-200">
+                      <div className="text-2xl font-bold text-blue-700 mb-1">
+                        {resultsData.typingConsistencyScore}
+                      </div>
+                      <div className="text-sm text-gray-600 font-medium">Consistency Score</div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        {resultsData.typingConsistencyScore >= 80 ? 'Excellent' : 
+                         resultsData.typingConsistencyScore >= 60 ? 'Good' : 
+                         resultsData.typingConsistencyScore >= 40 ? 'Fair' : 'Needs Work'}
+                      </div>
+                    </div>
+                    
+                    <div className="text-center p-4 bg-orange-50 rounded-lg border border-orange-200">
+                      <div className="text-2xl font-bold text-orange-700 mb-1">
+                        {resultsData.fatigueScore}
+                      </div>
+                      <div className="text-sm text-gray-600 font-medium">Fatigue Score</div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        {resultsData.fatigueScore <= 20 ? 'No Fatigue' : 
+                         resultsData.fatigueScore <= 40 ? 'Mild Fatigue' : 
+                         resultsData.fatigueScore <= 60 ? 'Moderate Fatigue' : 'High Fatigue'}
+                      </div>
+                    </div>
+                    
+                    <div className="text-center p-4 bg-green-50 rounded-lg border border-green-200">
+                      <div className="text-2xl font-bold text-green-700 mb-1">
+                        {resultsData.reactionDelay.toFixed(2)}s
+                      </div>
+                      <div className="text-sm text-gray-600 font-medium">Reaction Delay</div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        {resultsData.reactionDelay <= 1 ? 'Quick Start' : 
+                         resultsData.reactionDelay <= 3 ? 'Normal' : 'Slow Start'}
+                      </div>
+                    </div>
+                    
+                    <div className="text-center p-4 bg-purple-50 rounded-lg border border-purple-200">
+                      <div className="text-2xl font-bold text-purple-700 mb-1">
+                        {resultsData.topErrorHotspots.length}
+                      </div>
+                      <div className="text-sm text-gray-600 font-medium">Error Hotspots</div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        Problem Areas
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Error and Backspace Hotspots */}
+                  {(resultsData.topErrorHotspots.length > 0 || resultsData.topBackspaceHotspots.length > 0) && (
+                    <div className="mb-6">
+                      <h4 className="text-lg font-semibold text-gray-800 mb-3">🎯 Error & Correction Analysis</h4>
+                      
+                      {/* Summary */}
+                      <div className="bg-gradient-to-r from-red-50 to-yellow-50 p-4 rounded-lg border border-red-200 mb-4">
+                        <p className="text-gray-700 text-sm leading-relaxed">
+                          {generateHotspotSummary(resultsData.topErrorHotspots, resultsData.topBackspaceHotspots)}
+                        </p>
+                      </div>
+
+                      {/* Combined Bar Chart */}
+                      <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
+                      <div className="text-center mb-3">
+                        <span className="text-sm font-medium text-gray-600">Issues per Second</span>
+                      </div>
+                      <div className="h-32 relative">
+                        <div className="absolute inset-0 flex items-end justify-between">
+                          {Array.from({ length: testSettings.duration }, (_, second) => {
+                            const errorCount = resultsData.topErrorHotspots.find(h => h.second === second + 1)?.count || 0;
+                            const backspaceCount = resultsData.topBackspaceHotspots.find(h => h.second === second + 1)?.count || 0;
+                            const totalIssues = errorCount + backspaceCount;
+                            
+                            // Calculate max issues across all seconds
+                            const allIssues = Array.from({ length: testSettings.duration }, (_, s) => {
+                              const e = resultsData.topErrorHotspots.find(h => h.second === s + 1)?.count || 0;
+                              const b = resultsData.topBackspaceHotspots.find(h => h.second === s + 1)?.count || 0;
+                              return e + b;
+                            });
+                            const maxIssues = Math.max(...allIssues, 1); // Ensure at least 1 to avoid division by zero
+                            
+                            return (
+                              <div 
+                                key={second}
+                                className="flex-1 mx-0.5 relative group"
+                                style={{ height: '100%' }}
+                              >
+                                <div className="w-full flex flex-col justify-end h-full">
+                                  {/* Error bar */}
+                                  {errorCount > 0 && (
+                                    <div 
+                                      className="w-full bg-red-500 rounded-t transition-all duration-300 hover:opacity-80"
+                                      style={{ height: `${(errorCount / maxIssues) * 100}%` }}
+                                    >
+                                      <div className="absolute -top-6 left-1/2 transform -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity bg-red-600 text-white text-xs px-2 py-1 rounded whitespace-nowrap">
+                                        {errorCount} error{errorCount !== 1 ? 's' : ''}
+                                      </div>
+                                    </div>
+                                  )}
+                                  {/* Backspace bar */}
+                                  {backspaceCount > 0 && (
+                                    <div 
+                                      className="w-full bg-yellow-500 transition-all duration-300 hover:opacity-80"
+                                      style={{ height: `${(backspaceCount / maxIssues) * 100}%` }}
+                                    >
+                                      <div className="absolute -top-6 left-1/2 transform -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity bg-yellow-600 text-white text-xs px-2 py-1 rounded whitespace-nowrap">
+                                        {backspaceCount} backspace{backspaceCount !== 1 ? 's' : ''}
+                                      </div>
+                                    </div>
+                                  )}
+                                  {/* Empty state indicator */}
+                                  {totalIssues === 0 && (
+                                    <div className="w-full h-1 bg-gray-200 rounded"></div>
+                                  )}
+                                </div>
+                                {/* Second label */}
+                                {totalIssues > 0 && (
+                                  <div className="absolute -bottom-6 left-1/2 transform -translate-x-1/2 text-xs text-gray-600 font-medium">
+                                    {second + 1}s
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                        {/* Y-axis labels */}
+                        <div className="absolute left-0 top-0 h-full flex flex-col justify-between text-xs text-gray-500 pr-2">
+                          {(() => {
+                            const allIssues = Array.from({ length: testSettings.duration }, (_, s) => {
+                              const e = resultsData.topErrorHotspots.find(h => h.second === s + 1)?.count || 0;
+                              const b = resultsData.topBackspaceHotspots.find(h => h.second === s + 1)?.count || 0;
+                              return e + b;
+                            });
+                            const maxIssues = Math.max(...allIssues, 1);
+                            return [maxIssues, Math.ceil(maxIssues * 0.75), Math.ceil(maxIssues * 0.5), Math.ceil(maxIssues * 0.25), 0].map((value, index) => (
+                              <div key={index} className="flex items-center">
+                                <span>{value}</span>
+                                <div className="ml-2 w-4 h-px bg-gray-300"></div>
+                              </div>
+                            ));
+                          })()}
+                        </div>
+                      </div>
+                      <div className="mt-6 flex justify-center space-x-6 text-sm">
+                        <div className="flex items-center">
+                          <div className="w-3 h-3 bg-red-500 rounded mr-2"></div>
+                          <span>Errors</span>
+                        </div>
+                        <div className="flex items-center">
+                          <div className="w-3 h-3 bg-yellow-500 rounded mr-2"></div>
+                          <span>Backspaces</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Most Missed Characters */}
+              {Object.keys(missedCharacters).length > 0 && (
+                <div className="bg-white p-6 rounded-lg border border-blue-200 shadow-sm mb-6">
+                  <h3 className="text-xl font-semibold text-blue-900 mb-4">Most Missed Characters</h3>
+                  <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                    {Object.entries(missedCharacters)
+                      .sort(([,a], [,b]) => b - a)
+                      .slice(0, 10)
+                      .map(([char, count]) => (
+                        <div key={char} className="text-center p-2 bg-gray-50 rounded border">
+                          <div className="font-mono text-lg font-bold text-blue-700">{char}</div>
+                          <div className="text-sm text-red-600">{count} miss{count !== 1 ? 'es' : ''}</div>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              )}
+              
+              {/* Export Buttons */}
+              {exportData && (
+                <div className="bg-white p-6 rounded-lg border border-blue-200 shadow-sm mb-6">
+                  <h3 className="text-xl font-semibold text-blue-900 mb-4">Export Session Data</h3>
+                  <div className="flex flex-col sm:flex-row gap-3 justify-center">
+                    <Button 
+                      onClick={() => exportToCSV(exportData)}
+                      variant="outline"
+                      className="border-green-300 text-green-700 hover:bg-green-50 hover:text-green-800"
+                    >
+                      📊 Export as CSV
+                    </Button>
+                    <Button 
+                      onClick={() => exportToJSON(exportData)}
+                      variant="outline"
+                      className="border-purple-300 text-purple-700 hover:bg-purple-50 hover:text-purple-800"
+                    >
+                      📄 Export as JSON
+                    </Button>
+                  </div>
+                  <p className="text-sm text-gray-600 text-center mt-3">
+                    Files will be named with the test timestamp
+                  </p>
+                </div>
+              )}
+              
+              <div className="text-center space-y-4">
+                <Button onClick={() => window.location.reload()} className="bg-blue-600 text-white px-6 py-2 rounded-md hover:bg-blue-700 transition-colors">
+                  Take Another Test
+                </Button>
+              </div>
+            </div>
+          </div>
+        {'}'}
+
+        {/* Historical Results */}
+        {showHistoricalResults && selectedSession && (
+          <div className="bg-gray-50 p-6 rounded-lg">
+            <div className="max-w-4xl mx-auto">
+              <div className="flex items-center justify-between mb-6">
+                <h2 className="text-3xl font-bold text-blue-900">Historical Test Results</h2>
+                <Button 
+                  onClick={clearHistoricalResults}
+                  variant="outline"
+                  className="text-blue-600 border-blue-300 hover:bg-blue-50 hover:text-blue-700"
+                >
+                  ← Back to Test
+                </Button>
+              </div>
+              
+              {/* Main Stats */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                <div className="bg-white p-6 rounded-lg border border-blue-200 shadow-sm text-center">
+                  <div className="text-4xl font-bold text-blue-600 mb-2">
+                    {selectedSession.wpm.toFixed(1)}
+                  </div>
+                  <div className="text-gray-600 uppercase tracking-wide text-sm font-medium">Words Per Minute</div>
+                </div>
+                
+                <div className="bg-white p-6 rounded-lg border border-blue-200 shadow-sm text-center">
+                  <div className="text-4xl font-bold text-blue-600 mb-2">
+                    {selectedSession.accuracy.toFixed(1)}%
+                  </div>
+                  <div className="text-gray-600 uppercase tracking-wide text-sm font-medium">Accuracy</div>
+                </div>
+                
+                <div className="bg-white p-6 rounded-lg border border-blue-200 shadow-sm text-center">
+                  <div className="text-4xl font-bold text-blue-600 mb-2">
+                    {selectedSession.backspaces}
+                  </div>
+                  <div className="text-gray-600 uppercase tracking-wide text-sm font-medium">Backspaces</div>
+                </div>
+              </div>
+
+              {/* Historical Results Summary */}
+              <div className="bg-gradient-to-r from-blue-50 to-indigo-50 p-6 rounded-lg border border-blue-200 shadow-sm mb-8">
+                <h3 className="text-xl font-semibold text-blue-900 mb-4">📊 Performance Summary</h3>
+                <p className="text-gray-700 leading-relaxed text-lg">
+                  {generateResultsSummary(
+                    selectedSession.wpm, 
+                    selectedSession.accuracy, 
+                    selectedSession.backspaces, 
+                    selectedSession.wpmHistory, 
+                    selectedSession.consistencyScore
+                  )}
+                </p>
+              </div>
+
+              {/* Historical WPM Over Time Chart */}
+              {selectedSession.wpmHistory.length > 0 && (
+                <div className="bg-white p-6 rounded-lg border border-blue-200 shadow-sm mb-6">
+                  <h3 className="text-xl font-semibold text-blue-900 mb-4">📈 WPM Over Time</h3>
+                  <div className="h-64 relative">
+                    <div className="absolute inset-0 flex items-end justify-between">
+                      {selectedSession.wpmHistory.map((wpm, index) => {
+                        const maxWPM = Math.max(...selectedSession.wpmHistory);
+                        const height = maxWPM > 0 ? (wpm / maxWPM) * 100 : 0;
+                        const isPeak = wpm === maxWPM;
+                        const isDrop = index > 0 && wpm < selectedSession.wpmHistory[index - 1] * 0.8;
+                        
+                        return (
+                          <div 
+                            key={index}
+                            className="flex-1 mx-0.5 relative group"
+                            style={{ height: '100%' }}
+                          >
+                            <div 
+                              className={`w-full transition-all duration-300 rounded-t ${
+                                isPeak ? 'bg-green-500' : 
+                                isDrop ? 'bg-red-500' : 'bg-blue-500'
+                              } hover:opacity-80`}
+                              style={{ height: `${height}%` }}
+                            >
+                              <div className="absolute -top-8 left-1/2 transform -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity bg-gray-800 text-white text-xs px-2 py-1 rounded whitespace-nowrap">
+                                {wpm.toFixed(1)} WPM
+                              </div>
+                            </div>
+                            {isPeak && (
+                              <div className="absolute -top-12 left-1/2 transform -translate-x-1/2 bg-green-600 text-white text-xs px-2 py-1 rounded">
+                                Peak: {wpm.toFixed(1)}
+                              </div>
+                            )}
+                            {isDrop && (
+                              <div className="absolute -top-12 left-1/2 transform -translate-x-1/2 bg-red-600 text-white text-xs px-2 py-1 rounded">
+                                Drop: {wpm.toFixed(1)}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {/* Y-axis labels */}
+                    <div className="absolute left-0 top-0 h-full flex flex-col justify-between text-xs text-gray-500 pr-2">
+                      {(() => {
+                        const maxWPM = Math.max(...selectedSession.wpmHistory);
+                        return [maxWPM, maxWPM * 0.75, maxWPM * 0.5, maxWPM * 0.25, 0].map((value, index) => (
+                          <div key={index} className="flex items-center">
+                            <span>{value.toFixed(0)}</span>
+                            <div className="ml-2 w-8 h-px bg-gray-300"></div>
+                          </div>
+                        ));
+                      })()}
+                    </div>
+                    {/* X-axis labels */}
+                    <div className="absolute bottom-0 left-0 right-0 flex justify-between text-xs text-gray-500 pt-2">
+                      {selectedSession.wpmHistory.map((_, index) => (
+                        <span key={index} className="flex-1 text-center">
+                          {index + 1}s
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="mt-4 flex justify-center space-x-6 text-sm">
+                    <div className="flex items-center">
+                      <div className="w-3 h-3 bg-blue-500 rounded mr-2"></div>
+                      <span>Normal</span>
+                    </div>
+                    <div className="flex items-center">
+                      <div className="w-3 h-3 bg-green-500 rounded mr-2"></div>
+                      <span>Peak</span>
+                    </div>
+                    <div className="flex items-center">
+                      <div className="w-3 h-3 bg-red-500 rounded mr-2"></div>
+                      <span>Drop</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Test Details */}
+              <div className="bg-white p-6 rounded-lg border border-blue-200 shadow-sm mb-6">
+                <h3 className="text-xl font-semibold text-blue-900 mb-4">Test Details</h3>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                  <div>
+                    <span className="text-gray-600">Test Duration:</span>
+                    <div className="font-semibold text-blue-700">{selectedSession.testDuration}s</div>
+                  </div>
+                  <div>
+                    <span className="text-gray-600">Text Type:</span>
+                    <div className="font-semibold text-blue-700 capitalize">{selectedSession.textType}</div>
+                  </div>
+                  <div>
+                    <span className="text-gray-600">Total Characters:</span>
+                    <div className="font-semibold text-blue-700">{selectedSession.totalCharacters}</div>
+                  </div>
+                  <div>
+                    <span className="text-gray-600">Correct Characters:</span>
+                    <div className="font-semibold text-green-600">{selectedSession.correctCharacters}</div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Behavioral Metrics */}
+              <div className="bg-white p-6 rounded-lg border border-blue-200 shadow-sm mb-6">
+                <h3 className="text-xl font-semibold text-blue-900 mb-4">Behavioral Analysis</h3>
+                
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                  <div className="text-center p-4 bg-blue-50 rounded-lg border border-blue-200">
+                    <div className="text-2xl font-bold text-blue-700 mb-1">
+                      {selectedSession.consistencyScore.toFixed(1)}
+                    </div>
+                    <div className="text-sm text-gray-600 font-medium">Consistency Score</div>
+                    <div className="text-xs text-gray-500 mt-1">
+                      {selectedSession.consistencyScore >= 80 ? 'Excellent' : 
+                       selectedSession.consistencyScore >= 60 ? 'Good' : 
+                       selectedSession.consistencyScore >= 40 ? 'Fair' : 'Needs Work'}
+                    </div>
+                  </div>
+                  
+                  <div className="text-center p-4 bg-orange-50 rounded-lg border border-orange-200">
+                    <div className="text-2xl font-bold text-orange-700 mb-1">
+                      {selectedSession.fatigueScore.toFixed(1)}
+                    </div>
+                    <div className="text-sm text-gray-600 font-medium">Fatigue Score</div>
+                    <div className="text-xs text-gray-500 mt-1">
+                      {selectedSession.fatigueScore <= 20 ? 'Low Fatigue' : 
+                       selectedSession.fatigueScore <= 40 ? 'Moderate' : 'High Fatigue'}
+                    </div>
+                  </div>
+                  
+                  <div className="text-center p-4 bg-green-50 rounded-lg border border-green-200">
+                    <div className="text-2xl font-bold text-green-700 mb-1">
+                      {selectedSession.reactionDelay.toFixed(1)}ms
+                    </div>
+                    <div className="text-sm text-gray-600 font-medium">Reaction Delay</div>
+                    <div className="text-xs text-gray-500 mt-1">
+                      {selectedSession.reactionDelay <= 100 ? 'Fast' : 
+                       selectedSession.reactionDelay <= 200 ? 'Average' : 'Slow'}
+                    </div>
+                  </div>
+                  
+                  <div className="text-center p-4 bg-red-50 rounded-lg border border-red-200">
+                    <div className="text-2xl font-bold text-red-700 mb-1">
+                      {selectedSession.topErrorHotspots.length}
+                    </div>
+                    <div className="text-sm text-gray-600 font-medium">Error Hotspots</div>
+                    <div className="text-xs text-gray-500 mt-1">
+                      Problem Areas
+                    </div>
+                  </div>
+                </div>
+
+                {/* Error and Backspace Hotspots */}
+                {(selectedSession.topErrorHotspots.length > 0 || selectedSession.topBackspaceHotspots.length > 0) && (
+                  <div className="mb-6">
+                    <h4 className="text-lg font-semibold text-gray-800 mb-3">🎯 Error & Correction Analysis</h4>
+                    
+                    {/* Summary */}
+                    <div className="bg-gradient-to-r from-red-50 to-yellow-50 p-4 rounded-lg border border-red-200 mb-4">
+                      <p className="text-gray-700 text-sm leading-relaxed">
+                        {generateHotspotSummary(selectedSession.topErrorHotspots, selectedSession.topBackspaceHotspots)}
+                      </p>
+                    </div>
+
+                    {/* Combined Bar Chart */}
+                    <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
+                      <div className="text-center mb-3">
+                        <span className="text-sm font-medium text-gray-600">Issues per Second</span>
+                      </div>
+                      <div className="h-32 relative">
+                        <div className="absolute inset-0 flex items-end justify-between">
+                          {Array.from({ length: selectedSession.testDuration }, (_, second) => {
+                            const errorCount = selectedSession.topErrorHotspots.find(h => h.second === second + 1)?.count || 0;
+                            const backspaceCount = selectedSession.topBackspaceHotspots.find(h => h.second === second + 1)?.count || 0;
+                            const totalIssues = errorCount + backspaceCount;
+                            const maxIssues = Math.max(
+                              ...Array.from({ length: selectedSession.testDuration }, (_, s) => {
+                                const e = selectedSession.topErrorHotspots.find(h => h.second === s + 1)?.count || 0;
+                                const b = selectedSession.topBackspaceHotspots.find(h => h.second === s + 1)?.count || 0;
+                                return e + b;
+                              })
+                            );
+                            const height = maxIssues > 0 ? (totalIssues / maxIssues) * 100 : 0;
+                            
+                            return (
+                              <div 
+                                key={second}
+                                className="flex-1 mx-0.5 relative group"
+                                style={{ height: '100%' }}
+                              >
+                                <div className="w-full flex flex-col justify-end">
+                                  {/* Error bar */}
+                                  {errorCount > 0 && (
+                                    <div 
+                                      className="w-full bg-red-500 rounded-t transition-all duration-300 hover:opacity-80"
+                                      style={{ height: `${(errorCount / maxIssues) * 100}%` }}
+                                    >
+                                      <div className="absolute -top-6 left-1/2 transform -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity bg-red-600 text-white text-xs px-2 py-1 rounded whitespace-nowrap">
+                                        {errorCount} error{errorCount !== 1 ? 's' : ''}
+                                      </div>
+                                    </div>
+                                  )}
+                                  {/* Backspace bar */}
+                                  {backspaceCount > 0 && (
+                                    <div 
+                                      className="w-full bg-yellow-500 transition-all duration-300 hover:opacity-80"
+                                      style={{ height: `${(backspaceCount / maxIssues) * 100}%` }}
+                                    >
+                                      <div className="absolute -top-6 left-1/2 transform -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity bg-yellow-600 text-white text-xs px-2 py-1 rounded whitespace-nowrap">
+                                        {backspaceCount} backspace{backspaceCount !== 1 ? 's' : ''}
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                                {/* Second label */}
+                                {totalIssues > 0 && (
+                                  <div className="absolute -bottom-6 left-1/2 transform -translate-x-1/2 text-xs text-gray-600 font-medium">
+                                    {second + 1}s
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                        {/* Y-axis labels */}
+                        <div className="absolute left-0 top-0 h-full flex flex-col justify-between text-xs text-gray-500 pr-2">
+                          {(() => {
+                            const maxIssues = Math.max(
+                              ...Array.from({ length: selectedSession.testDuration }, (_, s) => {
+                                const e = selectedSession.topErrorHotspots.find(h => h.second === s + 1)?.count || 0;
+                                const b = selectedSession.topBackspaceHotspots.find(h => h.second === s + 1)?.count || 0;
+                                return e + b;
+                              })
+                            );
+                            return [maxIssues, Math.ceil(maxIssues * 0.75), Math.ceil(maxIssues * 0.5), Math.ceil(maxIssues * 0.25), 0].map((value, index) => (
+                              <div key={index} className="flex items-center">
+                                <span>{value}</span>
+                                <div className="ml-2 w-4 h-px bg-gray-300"></div>
+                              </div>
+                            ));
+                          })()}
+                        </div>
+                      </div>
+                      <div className="mt-6 flex justify-center space-x-6 text-sm">
+                        <div className="flex items-center">
+                          <div className="w-3 h-3 bg-red-500 rounded mr-2"></div>
+                          <span>Errors</span>
+                        </div>
+                        <div className="flex items-center">
+                          <div className="w-3 h-3 bg-yellow-500 rounded mr-2"></div>
+                          <span>Backspaces</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Most Missed Characters */}
+              {Object.keys(selectedSession.missedCharacters).length > 0 && (
+                <div className="bg-white p-6 rounded-lg border border-blue-200 shadow-sm mb-6">
+                  <h3 className="text-xl font-semibold text-blue-900 mb-4">Most Missed Characters</h3>
+                  <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                    {Object.entries(selectedSession.missedCharacters)
+                      .sort(([,a], [,b]) => b - a)
+                      .slice(0, 10)
+                      .map(([char, count]) => (
+                        <div key={char} className="text-center p-2 bg-gray-50 rounded border">
+                          <div className="font-mono text-lg font-bold text-blue-700">{char}</div>
+                          <div className="text-sm text-red-600">{count} miss{count !== 1 ? 'es' : ''}</div>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Persona Insights */}
+              {selectedSession.personaInsights.length > 0 && (
+                <div className="bg-gradient-to-r from-purple-50 to-blue-50 p-6 rounded-lg border-2 border-purple-200 shadow-lg mb-6">
+                  <h3 className="text-xl font-semibold text-purple-900 mb-4">💡 Insights from This Session</h3>
+                  <ul className="space-y-2">
+                    {selectedSession.personaInsights.map((insight, index) => (
+                      <li key={index} className="flex items-start">
+                        <span className="text-purple-600 mr-2">•</span>
+                        <span className="text-gray-700">{insight}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              <div className="text-center space-y-4">
+                <Button onClick={clearHistoricalResults} className="bg-blue-600 text-white px-6 py-2 rounded-md hover:bg-blue-700 transition-colors">
+                  ← Back to Test
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Session History */}
+        <div className="mt-8">
+          <SessionHistory 
+            onSessionSelect={displayHistoricalResults}
+            selectedSessionId={selectedSession?.id || null}
+          />
+        </div>
+      </div>
+    </div>
+  );
+};

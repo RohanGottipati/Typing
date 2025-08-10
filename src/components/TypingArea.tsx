@@ -2,130 +2,130 @@ import { useEffect, useRef } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 
 interface TypingAreaProps {
-  words: string[];
-  currentWordIndex: number;
-  userInput: string;
-  onTyping: (input: string, isBackspace: boolean) => void;
-  onWordComplete: () => void;
+  expectedText: string;
+  currentPosition: number;
+  characterStatus: ('correct' | 'incorrect' | '')[];
+  typedCharacters: string[];
+  onKeyDown: (e: React.KeyboardEvent) => void;
   isActive: boolean;
+  quoteAuthor?: string;
+  liveWPM?: number;
+  isZenMode?: boolean;
+  zenContent?: string;
+  onZenContentChange?: (content: string) => void;
+  onEndTest?: () => void;
 }
 
 export const TypingArea = ({
-  words,
-  currentWordIndex,
-  userInput,
-  onTyping,
-  onWordComplete,
-  isActive
+  expectedText,
+  currentPosition,
+  characterStatus,
+  typedCharacters,
+  onKeyDown,
+  isActive,
+  quoteAuthor,
+  liveWPM,
+  isZenMode = false,
+  zenContent = '',
+  onZenContentChange,
+  onEndTest
 }: TypingAreaProps) => {
-  const inputRef = useRef<HTMLInputElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const zenTextareaRef = useRef<HTMLTextAreaElement>(null);
 
+  // Focus management
   useEffect(() => {
-    if (isActive && inputRef.current) {
-      inputRef.current.focus();
-    }
-  }, [isActive]);
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    const key = e.key;
-    const input = e.currentTarget as HTMLInputElement;
-    
-    if (key === ' ') {
-      e.preventDefault();
-      if (userInput.trim()) {
-        onWordComplete();
+    if (isActive) {
+      if (isZenMode && zenTextareaRef.current) {
+        zenTextareaRef.current.focus({ preventScroll: true });
+      } else if (containerRef.current) {
+        containerRef.current.focus({ preventScroll: true });
       }
-      return;
     }
-    
-    if (key === 'Backspace') {
-      onTyping(userInput.slice(0, -1), true);
-      return;
-    }
-    
-    if (key.length === 1) {
-      const newInput = userInput + key;
-      onTyping(newInput, false);
-    }
-  };
+  }, [isActive, isZenMode]);
 
-  const renderWords = () => {
-    const visibleWords = words.slice(currentWordIndex, currentWordIndex + 20);
-    
-    return visibleWords.map((word, index) => {
-      const absoluteIndex = currentWordIndex + index;
-      const isCurrentWord = absoluteIndex === currentWordIndex;
-      
+  const renderText = () => {
+    if (isZenMode) {
       return (
-        <span key={absoluteIndex} className="inline-block mr-4 mb-2">
-          {word.split('').map((char, charIndex) => {
-            let className = 'typing-font text-2xl ';
-            
-            if (isCurrentWord) {
-              if (charIndex < userInput.length) {
-                className += userInput[charIndex] === char 
-                  ? 'text-typing-correct' 
-                  : 'text-typing-incorrect bg-typing-incorrect bg-opacity-20';
-              } else if (charIndex === userInput.length) {
-                className += 'text-typing-current bg-typing-current bg-opacity-20 cursor-blink';
-              } else {
-                className += 'text-typing-text';
-              }
-            } else if (absoluteIndex < currentWordIndex) {
-              className += 'text-typing-correct opacity-50';
-            } else {
-              className += 'text-typing-text';
-            }
-            
-            return (
-              <span key={charIndex} className={className}>
-                {char}
-              </span>
-            );
-          })}
-          
-          {/* Show cursor at end of current word if input matches word length */}
-          {isCurrentWord && userInput.length === word.length && (
-            <span className="text-typing-cursor cursor-blink typing-font text-2xl">|</span>
-          )}
-        </span>
+        <textarea
+          ref={zenTextareaRef}
+          value={zenContent}
+          onChange={(e) => onZenContentChange?.(e.target.value)}
+          onKeyDown={onKeyDown}
+          className="w-full min-h-[400px] p-4 text-lg leading-relaxed bg-transparent border-none outline-none resize-none font-mono text-white placeholder-gray-500"
+          placeholder="Start typing here..."
+          disabled={!isActive}
+        />
       );
-    });
+    }
+
+    return (
+      <div className="relative">
+        {expectedText.split('').map((char, index) => {
+          const status = characterStatus[index] || '';
+          const isCurrent = index === currentPosition;
+          
+          return (
+            <span
+              key={index}
+              data-position={index}
+              className={`
+                ${status === 'correct' ? 'text-green-500' : ''}
+                ${status === 'incorrect' ? 'text-red-500 bg-red-100' : ''}
+                ${isCurrent ? 'text-white bg-blue-600 border-b-2 border-blue-400' : ''}
+                ${char === ' ' ? 'whitespace-pre' : ''}
+              `}
+            >
+              {char}
+            </span>
+          );
+        })}
+      </div>
+    );
   };
 
   return (
-    <Card className="bg-typing-bg border-border">
-      <CardContent className="p-8">
-        <div className="min-h-[200px] relative">
-          {/* Hidden input for capturing keystrokes */}
-          <input
-            ref={inputRef}
-            className="absolute opacity-0 pointer-events-none"
-            value={userInput}
-            onChange={() => {}} // Handled by onKeyDown
-            onKeyDown={handleKeyDown}
-            disabled={!isActive}
-          />
-          
-          {/* Typing text display */}
-          <div 
-            className="leading-relaxed cursor-pointer"
-            onClick={() => inputRef.current?.focus()}
-          >
-            {words.length > 0 ? renderWords() : (
-              <p className="text-typing-text typing-font text-2xl">
-                Loading words...
-              </p>
+    <Card className="w-full border-2 border-gray-200 shadow-sm bg-gray-900">
+      <CardContent className="p-6">
+        {/* Header with live stats */}
+        {(quoteAuthor || liveWPM !== undefined) && (
+          <div className="flex justify-between items-center mb-4 text-sm text-gray-400">
+            {quoteAuthor && <span>— {quoteAuthor}</span>}
+            {liveWPM !== undefined && (
+              <span className="font-mono font-semibold">
+                WPM: {Math.round(liveWPM)}
+              </span>
             )}
           </div>
-          
-          {/* Focus indicator */}
-          {isActive && (
-            <div className="absolute bottom-4 left-4 text-typing-text text-sm opacity-70">
-              Click here or start typing to focus
-            </div>
-          )}
+        )}
+
+        {/* Typing area */}
+        <div
+          ref={containerRef}
+          tabIndex={0}
+          onKeyDown={onKeyDown}
+          className={`
+            relative min-h-[200px] p-4 text-lg leading-relaxed font-mono
+            ${isActive ? 'cursor-text' : 'cursor-default'}
+            ${isZenMode ? 'hidden' : 'block'}
+            text-white
+          `}
+          style={{ outline: 'none' }}
+        >
+          {renderText()}
         </div>
+
+        {/* End Test button for Zen mode */}
+        {isZenMode && isActive && onEndTest && (
+          <div className="mt-4 text-center">
+            <button
+              onClick={onEndTest}
+              className="px-6 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors font-medium"
+            >
+              End Test
+            </button>
+          </div>
+        )}
       </CardContent>
     </Card>
   );
