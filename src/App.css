@@ -40,3 +40,99 @@
 .read-the-docs {
   color: #888;
 }
+
+/* Typing surface optimizations */
+.test-root {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.viewport {
+  position: relative;
+  height: 9.5rem;
+  overflow: hidden;
+  background: transparent;
+}
+
+.flow {
+  position: relative;
+  will-change: transform;
+  transition: transform 160ms ease;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 1.125rem;
+  line-height: 1.75;
+  color: #e5e7eb;
+}
+
+.word {
+  display: inline;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.char {
+  position: relative;
+  display: inline;
+  transition: color 0.1s ease;
+}
+
+.char.pending {
+  color: #6b7280;
+}
+
+.char.correct {
+  color: #10b981;
+}
+
+.char.incorrect {
+  color: #ef4444;
+  text-decoration: underline;
+  text-decoration-color: #ef4444;
+  text-decoration-thickness: 2px;
+}
+
+.char.extra {
+  color: #f59e0b;
+  text-decoration: underline;
+  text-decoration-color: #f59e0b;
+  text-decoration-thickness: 2px;
+}
+
+.space {
+  display: inline;
+  transition: color 0.1s ease;
+}
+
+.space.pending {
+  color: transparent;
+}
+
+.space.correct {
+  color: #10b981;
+}
+
+.space.incorrect {
+  color: #ef4444;
+}
+
+#caret {
+  position: absolute;
+  width: 2px;
+  background-color: #10b981;
+  transition: none;
+  pointer-events: none;
+  z-index: 10;
+}
+
+.input-trap {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+}

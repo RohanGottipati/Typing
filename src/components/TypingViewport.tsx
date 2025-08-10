@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback, forwardRef, useImperativeHandle } from 'react';
+import { useEffect, useRef, useCallback, forwardRef, useImperativeHandle } from 'react';
 
 interface TypingViewportProps {
   words: string[];
@@ -29,21 +29,28 @@ export const TypingViewport = forwardRef<TypingViewportRef, TypingViewportProps>
   onCompositionEnd,
   isActive
 }, ref) => {
+  // Core refs
   const viewportRef = useRef<HTMLDivElement>(null);
   const flowRef = useRef<HTMLDivElement>(null);
   const caretRef = useRef<HTMLSpanElement>(null);
   const trapRef = useRef<HTMLInputElement>(null);
   
-  // Refs for O(1) access to all chars and spaces
+  // Performance-critical refs (avoid setState in hot path)
   const wordRefs = useRef<Map<number, HTMLSpanElement>>(new Map());
   const charRefs = useRef<Map<string, HTMLSpanElement>>(new Map());
   const spaceRefs = useRef<Map<number, HTMLSpanElement>>(new Map());
   
-  // Line virtualization state
-  const [lineOfWord, setLineOfWord] = useState<number[]>([]);
-  const [currentLine, setCurrentLine] = useState(0);
-  const [lineHeight, setLineHeight] = useState(0);
+  // Line virtualization refs (no setState during typing)
+  const lineOfWordRef = useRef<number[]>([]);
+  const currentLineRef = useRef(0);
+  const lineHeightRef = useRef(0);
+  const rafIdRef = useRef<number | null>(null);
+  const isComposingRef = useRef(false);
+  
+  // ResizeObserver with throttling
   const resizeObserver = useRef<ResizeObserver | null>(null);
+  const pendingResizeRef = useRef(false);
+  const lastLineHeightRef = useRef(0);
 
   // Expose focus method
   useImperativeHandle(ref, () => ({
@@ -54,14 +61,19 @@ export const TypingViewport = forwardRef<TypingViewportRef, TypingViewportProps>
     }
   }));
 
-  // Calculate line indices for each word
+  // Calculate line indices (throttled)
   const calculateLineIndices = useCallback(() => {
     if (!flowRef.current || wordRefs.current.size === 0) return;
 
     const flow = flowRef.current;
     const computedStyle = window.getComputedStyle(flow);
     const newLineHeight = parseFloat(computedStyle.lineHeight);
-    setLineHeight(newLineHeight);
+    
+    // Only update if line height actually changed
+    if (newLineHeight !== lastLineHeightRef.current) {
+      lastLineHeightRef.current = newLineHeight;
+      lineHeightRef.current = newLineHeight;
+    }
 
     const firstWord = wordRefs.current.get(0);
     if (!firstWord) return;
@@ -72,29 +84,36 @@ export const TypingViewport = forwardRef<TypingViewportRef, TypingViewportProps>
     for (let i = 0; i < words.length; i++) {
       const wordEl = wordRefs.current.get(i);
       if (wordEl) {
-        const lineIndex = Math.round((wordEl.offsetTop - top0) / newLineHeight);
+        const lineIndex = Math.round((wordEl.offsetTop - top0) / lineHeightRef.current);
         newLineOfWord[i] = lineIndex;
       }
     }
 
-    setLineOfWord(newLineOfWord);
+    lineOfWordRef.current = newLineOfWord;
   }, [words.length]);
 
-  // Update current line and translate flow
-  const updateCurrentLine = useCallback((newLine: number) => {
-    if (!flowRef.current || newLine === currentLine) return;
+  // Single rAF for all layout operations
+  const scheduleLayoutUpdate = useCallback(() => {
+    if (rafIdRef.current != null) {
+      cancelAnimationFrame(rafIdRef.current);
+    }
+    
+    rafIdRef.current = requestAnimationFrame(() => {
+      rafIdRef.current = null;
+      if (!isActive) return;
+      
+      // Update caret position
+      updateCaretPosition();
+      
+      // Update line translation if needed
+      updateLineTranslation();
+    });
+  }, [isActive]);
 
-    setCurrentLine(newLine);
-    const translateY = -newLine * lineHeight;
-    flowRef.current.style.transform = `translate3d(0, ${translateY}px, 0)`;
-  }, [currentLine, lineHeight]);
-
-  // Update caret position using requestAnimationFrame
+  // Update caret position (DOM reads)
   const updateCaretPosition = useCallback(() => {
     if (!flowRef.current || !caretRef.current) return;
 
-    const flow = flowRef.current;
-    const caret = caretRef.current;
     let targetElement: HTMLElement | null = null;
 
     if (activeWord < words.length) {
@@ -112,100 +131,129 @@ export const TypingViewport = forwardRef<TypingViewportRef, TypingViewportProps>
 
     if (targetElement) {
       const rect = targetElement.getBoundingClientRect();
-      const flowRect = flow.getBoundingClientRect();
+      const flowRect = flowRef.current!.getBoundingClientRect();
       
-      const x = rect.left - flowRect.left;
-      const y = rect.top - flowRect.top;
+      const left = rect.left - flowRect.left;
+      const top = rect.top - flowRect.top;
       const height = rect.height;
-
-      caret.style.transform = `translate3d(${x}px, ${y}px, 0)`;
+      
+      const caret = caretRef.current!;
+      caret.style.transform = `translate3d(${left}px, ${top}px, 0)`;
       caret.style.height = `${height}px`;
     }
-  }, [activeWord, activeChar, words.length]);
+  }, [activeWord, activeChar, words]);
 
-  // Batch all updates in requestAnimationFrame
-  const batchUpdates = useCallback(() => {
-    if (!isActive) return;
+  // Update line translation (DOM writes)
+  const updateLineTranslation = useCallback(() => {
+    if (!flowRef.current || activeWord >= lineOfWordRef.current.length) return;
+    
+    const wordLine = lineOfWordRef.current[activeWord];
+    if (wordLine === undefined || wordLine === currentLineRef.current) return;
 
-    requestAnimationFrame(() => {
-      // Update current line if needed
-      if (activeWord < lineOfWord.length) {
-        const wordLine = lineOfWord[activeWord];
-        if (wordLine !== undefined && wordLine !== currentLine) {
-          updateCurrentLine(wordLine);
-        }
-      }
+    currentLineRef.current = wordLine;
+    const translateY = -wordLine * lineHeightRef.current;
+    flowRef.current.style.transform = `translate3d(0, ${translateY}px, 0)`;
+  }, [activeWord]);
 
-      // Update caret position
-      updateCaretPosition();
-    });
-  }, [isActive, activeWord, lineOfWord, currentLine, updateCurrentLine, updateCaretPosition]);
+  // Get opacity for line virtualization
+  const getLineOpacity = useCallback((wordIdx: number) => {
+    if (wordIdx >= lineOfWordRef.current.length) return 1;
+    
+    const wordLine = lineOfWordRef.current[wordIdx];
+    const distance = Math.abs(wordLine - currentLineRef.current);
+    
+    if (distance <= 1) return 1; // Current, previous, and next line
+    return 0.35; // Dimmed for other lines
+  }, []);
 
-  // Setup resize observer
+  // Initialize line indices after mount
   useEffect(() => {
-    if (!viewportRef.current) return;
-
-    resizeObserver.current = new ResizeObserver(() => {
+    if (isActive && wordRefs.current.size > 0) {
       calculateLineIndices();
-      batchUpdates();
-    });
+      scheduleLayoutUpdate();
+    }
+  }, [isActive, calculateLineIndices, scheduleLayoutUpdate]);
 
-    resizeObserver.current.observe(viewportRef.current);
-
-    return () => {
-      if (resizeObserver.current) {
-        resizeObserver.current.disconnect();
+  // Handle font loading once
+  useEffect(() => {
+    if (!isActive) return;
+    
+    const handleFontsReady = () => {
+      if (isActive) {
+        calculateLineIndices();
+        scheduleLayoutUpdate();
       }
     };
-  }, [calculateLineIndices, batchUpdates]);
 
-  // Combined effect for initialization and updates
-  useEffect(() => {
-    if (!isActive) return;
-    
-    // Initialize line indices if needed
-    if (wordRefs.current.size > 0) {
-      calculateLineIndices();
-    }
-    
-    // Handle font loading once
     if (document.fonts && document.fonts.ready) {
-      document.fonts.ready.then(() => {
+      document.fonts.ready.then(handleFontsReady).catch(() => {});
+    }
+  }, [isActive, calculateLineIndices, scheduleLayoutUpdate]);
+
+  // ResizeObserver with throttling
+  useEffect(() => {
+    const flow = flowRef.current;
+    if (!flow) return;
+
+    const ro = new ResizeObserver(() => {
+      if (pendingResizeRef.current) return;
+      pendingResizeRef.current = true;
+      
+      requestAnimationFrame(() => {
+        pendingResizeRef.current = false;
         if (isActive) {
           calculateLineIndices();
-          batchUpdates();
+          scheduleLayoutUpdate();
         }
-      }).catch(() => {});
-    }
+      });
+    });
     
-    // Focus input
-    if (trapRef.current) {
-      trapRef.current.focus();
-    }
-  }, [isActive, calculateLineIndices, batchUpdates]);
+    ro.observe(flow);
+    resizeObserver.current = ro;
+    
+    return () => {
+      ro.disconnect();
+      resizeObserver.current = null;
+    };
+  }, [isActive, calculateLineIndices, scheduleLayoutUpdate]);
 
-  // Update on active word/char changes (only when active)
+  // Update layout on active word/char changes
   useEffect(() => {
     if (isActive) {
-      batchUpdates();
+      scheduleLayoutUpdate();
     }
-  }, [activeWord, activeChar, batchUpdates, isActive]);
+  }, [activeWord, activeChar, isActive, scheduleLayoutUpdate]);
 
-  // Handle clicks to refocus
-  const handleViewportClick = useCallback(() => {
-    if (isActive && trapRef.current) {
-      trapRef.current.focus();
-    }
+  // Handle pointer events to refocus (no blur loop)
+  useEffect(() => {
+    const el = trapRef.current;
+    if (!el) return;
+    
+    const refocus = () => isActive && el.focus({ preventScroll: true });
+    viewportRef.current?.addEventListener('pointerdown', refocus);
+    
+    return () => viewportRef.current?.removeEventListener('pointerdown', refocus);
   }, [isActive]);
 
-  // Input event handlers
-  const handleBeforeInput = useCallback((e: InputEvent) => {
-    if (!isActive) return;
+  // Cleanup rAF on unmount
+  useEffect(() => {
+    return () => {
+      if (rafIdRef.current) {
+        cancelAnimationFrame(rafIdRef.current);
+      }
+    };
+  }, []);
+
+  // Input event handlers (minimal, no setState)
+  const handleBeforeInput = useCallback((e: React.FormEvent<HTMLInputElement>) => {
+    if (!isActive || isComposingRef.current) return;
     
     e.preventDefault();
     
-    if (e.data) {
-      onCharacterInput(e.data);
+    const target = e.target as HTMLInputElement;
+    if (target.value) {
+      onCharacterInput(target.value);
+      target.value = ''; // Clear the input
     }
   }, [isActive, onCharacterInput]);
 
@@ -244,23 +292,14 @@ export const TypingViewport = forwardRef<TypingViewportRef, TypingViewportProps>
   }, [isActive, onSpace, onBackspace]);
 
   const handleCompositionStart = useCallback(() => {
+    isComposingRef.current = true;
     onCompositionStart();
   }, [onCompositionStart]);
 
   const handleCompositionEnd = useCallback(() => {
+    isComposingRef.current = false;
     onCompositionEnd();
   }, [onCompositionEnd]);
-
-  // Handle pointer events to refocus (no blur loop)
-  useEffect(() => {
-    const el = trapRef.current;
-    if (!el) return;
-    
-    const refocus = () => isActive && el.focus({ preventScroll: true });
-    viewportRef.current?.addEventListener('pointerdown', refocus);
-    
-    return () => viewportRef.current?.removeEventListener('pointerdown', refocus);
-  }, [isActive]);
 
   // Store refs for performance
   const setWordRef = useCallback((wordIdx: number, element: HTMLSpanElement | null) => {
@@ -282,26 +321,27 @@ export const TypingViewport = forwardRef<TypingViewportRef, TypingViewportProps>
     }
   }, []);
 
-  // Get opacity for line virtualization
-  const getLineOpacity = useCallback((wordIdx: number) => {
-    if (wordIdx >= lineOfWord.length) return 1;
-    
-    const wordLine = lineOfWord[wordIdx];
-    const distance = Math.abs(wordLine - currentLine);
-    
-    if (distance <= 1) return 1; // Current, previous, and next line
-    return 0.35; // Dimmed for other lines
-  }, [lineOfWord, currentLine]);
-
   return (
     <section className="test-root">
       <div 
         className="viewport" 
         ref={viewportRef} 
         aria-label="typing test"
-        onClick={handleViewportClick}
+        style={{
+          position: 'relative',
+          height: '9.5rem',
+          overflow: 'hidden'
+        }}
       >
-        <div className="flow" ref={flowRef}>
+        <div 
+          className="flow" 
+          ref={flowRef}
+          style={{
+            position: 'relative',
+            willChange: 'transform',
+            transition: 'transform 160ms ease'
+          }}
+        >
           {words.map((word, wordIdx) => (
             <span 
               key={wordIdx}
@@ -331,7 +371,18 @@ export const TypingViewport = forwardRef<TypingViewportRef, TypingViewportProps>
               </span>
             </span>
           ))}
-          <span id="caret" ref={caretRef} aria-hidden />
+          <span 
+            id="caret" 
+            ref={caretRef} 
+            aria-hidden
+            style={{
+              position: 'absolute',
+              width: '2px',
+              backgroundColor: 'rgb(34 197 94)',
+              transition: 'none',
+              pointerEvents: 'none'
+            }}
+          />
         </div>
       </div>
 
@@ -343,10 +394,20 @@ export const TypingViewport = forwardRef<TypingViewportRef, TypingViewportProps>
         spellCheck={false}
         inputMode="none"
         aria-hidden="true"
-        onBeforeInput={handleBeforeInput}
+        onChange={handleBeforeInput}
         onKeyDown={handleKeyDown}
         onCompositionStart={handleCompositionStart}
         onCompositionEnd={handleCompositionEnd}
+        style={{
+          position: 'absolute',
+          opacity: 0,
+          pointerEvents: 'none',
+          width: '1px',
+          height: '1px',
+          padding: 0,
+          border: 'none',
+          outline: 'none'
+        }}
       />
     </section>
   );
