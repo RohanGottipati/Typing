@@ -17,6 +17,21 @@ export interface TypingViewportRef {
   focus: () => void;
 }
 
+interface GlyphPosition {
+  x: number;
+  y: number;
+  line: number;
+  width: number;
+  height: number;
+}
+
+interface WordLayout {
+  startX: number;
+  endX: number;
+  line: number;
+  glyphs: GlyphPosition[];
+}
+
 export const TypingViewport = forwardRef<TypingViewportRef, TypingViewportProps>(({
   words,
   activeWord,
@@ -29,34 +44,37 @@ export const TypingViewport = forwardRef<TypingViewportRef, TypingViewportProps>
   onCompositionEnd,
   isActive
 }, ref) => {
-  // Core DOM refs
+  // Canvas and rendering refs
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
-  const flowRef = useRef<HTMLDivElement>(null);
-  const caretRef = useRef<HTMLSpanElement>(null);
   const trapRef = useRef<HTMLInputElement>(null);
   
-  // Performance-critical refs (avoid setState in hot path)
-  const wordRefs = useRef<Map<number, HTMLSpanElement>>(new Map());
-  const charRefs = useRef<Map<string, HTMLSpanElement>>(new Map());
-  const spaceRefs = useRef<Map<number, HTMLSpanElement>>(new Map());
+  // Performance-critical refs (no setState during typing)
+  const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
+  const devicePixelRatioRef = useRef(1);
+  const fontMetricsRef = useRef({
+    fontSize: 30,
+    lineHeight: 48, // 1.6 * fontSize
+    letterSpacing: 0.6, // 0.02em * fontSize
+    fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Consolas', monospace"
+  });
   
-  // Layout and positioning refs (no setState during typing)
-  const lineOfWordRef = useRef<number[]>([]);
+  // Layout and positioning refs
+  const viewportWidthRef = useRef(0);
+  const viewportHeightRef = useRef(0);
+  const wordLayoutsRef = useRef<WordLayout[]>([]);
   const currentLineRef = useRef(0);
-  const lineHeightRef = useRef(0);
-  const containerWidthRef = useRef(0);
-  const containerHeightRef = useRef(0);
+  const verticalOffsetRef = useRef(0);
   
   // Animation and timing refs
   const rafIdRef = useRef<number | null>(null);
   const isComposingRef = useRef(false);
-  const pendingLayoutRef = useRef(false);
+  const pendingRenderRef = useRef(false);
+  const caretBlinkRef = useRef(0);
   
   // ResizeObserver with throttling
   const resizeObserver = useRef<ResizeObserver | null>(null);
   const pendingResizeRef = useRef(false);
-  const lastLineHeightRef = useRef(0);
-  const lastContainerWidthRef = useRef(0);
 
   // Expose focus method
   useImperativeHandle(ref, () => ({
@@ -67,154 +85,279 @@ export const TypingViewport = forwardRef<TypingViewportRef, TypingViewportProps>
     }
   }));
 
-  // Calculate line indices and word wrapping
-  const calculateLineIndices = useCallback(() => {
-    if (!flowRef.current || wordRefs.current.size === 0) return;
+  // Initialize canvas and context
+  const initializeCanvas = useCallback(() => {
+    const canvas = canvasRef.current;
+    const viewport = viewportRef.current;
+    if (!canvas || !viewport) return;
 
-    const flow = flowRef.current;
-    const computedStyle = window.getComputedStyle(flow);
-    const newLineHeight = parseFloat(computedStyle.lineHeight);
-    const newContainerWidth = flow.clientWidth;
+    const dpr = window.devicePixelRatio || 1;
+    devicePixelRatioRef.current = dpr;
     
-    // Only update if dimensions actually changed
-    const lineHeightChanged = newLineHeight !== lastLineHeightRef.current;
-    const containerWidthChanged = newContainerWidth !== lastContainerWidthRef.current;
+    const rect = viewport.getBoundingClientRect();
+    viewportWidthRef.current = rect.width;
+    viewportHeightRef.current = rect.height;
     
-    if (lineHeightChanged) {
-      lastLineHeightRef.current = newLineHeight;
-      lineHeightRef.current = newLineHeight;
+    // Set canvas size accounting for device pixel ratio
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
+    canvas.style.width = `${rect.width}px`;
+    canvas.style.height = `${rect.height}px`;
+    
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    
+    ctx.scale(dpr, dpr);
+    ctxRef.current = ctx;
+    
+    // Set font
+    const { fontSize, fontFamily } = fontMetricsRef.current;
+    ctx.font = `${fontSize}px ${fontFamily}`;
+    ctx.textBaseline = 'top';
+  }, []);
+
+  // Calculate word layouts with wrapping
+  const calculateWordLayouts = useCallback(() => {
+    if (!ctxRef.current || words.length === 0) return;
+
+    const ctx = ctxRef.current;
+    const { fontSize, lineHeight, letterSpacing } = fontMetricsRef.current;
+    const viewportWidth = viewportWidthRef.current - 32; // Account for padding
+    
+    ctx.font = `${fontSize}px ${fontMetricsRef.current.fontFamily}`;
+    
+    const layouts: WordLayout[] = [];
+    let currentX = 0;
+    let currentY = 0;
+    let currentLine = 0;
+    
+    for (let wordIdx = 0; wordIdx < words.length; wordIdx++) {
+      const word = words[wordIdx];
+      const wordWidth = ctx.measureText(word).width;
+      const spaceWidth = ctx.measureText(' ').width;
+      const totalWidth = wordWidth + spaceWidth;
+      
+      // Check if word would overflow
+      if (currentX + totalWidth > viewportWidth && currentX > 0) {
+        currentX = 0;
+        currentY += lineHeight;
+        currentLine++;
+      }
+      
+      const startX = currentX;
+      const glyphs: GlyphPosition[] = [];
+      
+      // Calculate glyph positions for each character
+      for (let charIdx = 0; charIdx < word.length; charIdx++) {
+        const char = word[charIdx];
+        const charWidth = ctx.measureText(char).width;
+        
+        glyphs.push({
+          x: currentX,
+          y: currentY,
+          line: currentLine,
+          width: charWidth,
+          height: lineHeight
+        });
+        
+        currentX += charWidth + letterSpacing;
+      }
+      
+      // Add space after word
+      glyphs.push({
+        x: currentX,
+        y: currentY,
+        line: currentLine,
+        width: spaceWidth,
+        height: lineHeight
+      });
+      
+      layouts.push({
+        startX,
+        endX: currentX + spaceWidth,
+        line: currentLine,
+        glyphs
+      });
+      
+      currentX += spaceWidth;
     }
     
-    if (containerWidthChanged) {
-      lastContainerWidthRef.current = newContainerWidth;
-      containerWidthRef.current = newContainerWidth;
-    }
+    wordLayoutsRef.current = layouts;
+  }, [words]);
 
-    // Only recalculate if dimensions changed
-    if (!lineHeightChanged && !containerWidthChanged) return;
+  // Render the typing area
+  const render = useCallback(() => {
+    if (!ctxRef.current || !isActive) return;
 
-    const firstWord = wordRefs.current.get(0);
-    if (!firstWord) return;
-
-    const top0 = firstWord.offsetTop;
-    const newLineOfWord: number[] = [];
-
-    for (let i = 0; i < words.length; i++) {
-      const wordEl = wordRefs.current.get(i);
-      if (wordEl) {
-        const lineIndex = Math.round((wordEl.offsetTop - top0) / lineHeightRef.current);
-        newLineOfWord[i] = lineIndex;
+    const ctx = ctxRef.current;
+    const { fontSize, lineHeight } = fontMetricsRef.current;
+    const viewportHeight = viewportHeightRef.current;
+    
+    // Clear canvas
+    ctx.clearRect(0, 0, viewportWidthRef.current, viewportHeight);
+    
+    // Apply vertical offset for line transitions
+    ctx.save();
+    ctx.translate(0, verticalOffsetRef.current);
+    
+    // Draw words and characters
+    for (let wordIdx = 0; wordIdx < words.length; wordIdx++) {
+      const word = words[wordIdx];
+      const layout = wordLayoutsRef.current[wordIdx];
+      const states = charState[wordIdx] || [];
+      
+      if (!layout) continue;
+      
+      // Draw each character
+      for (let charIdx = 0; charIdx < word.length; charIdx++) {
+        const char = word[charIdx];
+        const glyph = layout.glyphs[charIdx];
+        const state = states[charIdx] || 'pending';
+        
+        if (!glyph) continue;
+        
+        // Set color based on state
+        switch (state) {
+          case 'pending':
+            ctx.fillStyle = '#6b7280'; // dimmed
+            break;
+          case 'correct':
+            ctx.fillStyle = '#10b981'; // green
+            break;
+          case 'incorrect':
+            ctx.fillStyle = '#ef4444'; // red
+            break;
+          case 'extra':
+            ctx.fillStyle = '#f59e0b'; // amber
+            break;
+        }
+        
+        // Draw character
+        ctx.fillText(char, glyph.x, glyph.y);
+        
+        // Draw red background for extras
+        if (state === 'extra') {
+          ctx.fillStyle = 'rgba(239, 68, 68, 0.2)';
+          ctx.fillRect(glyph.x, glyph.y, glyph.width, glyph.height);
+        }
+      }
+      
+      // Draw space after word
+      const spaceGlyph = layout.glyphs[word.length];
+      const spaceState = states[word.length] || 'pending';
+      
+      if (spaceGlyph) {
+        // Draw underline for space
+        const isWordCorrect = states.slice(0, word.length).every(s => s === 'correct');
+        ctx.strokeStyle = isWordCorrect ? '#10b981' : '#ef4444';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(spaceGlyph.x, spaceGlyph.y + fontSize + 2);
+        ctx.lineTo(spaceGlyph.x + spaceGlyph.width, spaceGlyph.y + fontSize + 2);
+        ctx.stroke();
       }
     }
+    
+    ctx.restore();
+    
+    // Draw caret
+    if (activeWord < wordLayoutsRef.current.length) {
+      const layout = wordLayoutsRef.current[activeWord];
+      if (layout && activeChar < layout.glyphs.length) {
+        const glyph = layout.glyphs[activeChar];
+        
+        // Blinking caret
+        const blinkAlpha = Math.sin(Date.now() * 0.01) > 0 ? 1 : 0;
+        ctx.fillStyle = `rgba(16, 185, 129, ${blinkAlpha})`;
+        ctx.fillRect(glyph.x, glyph.y, 2, glyph.height);
+      }
+    }
+  }, [isActive, words, charState, activeWord, activeChar]);
 
-    lineOfWordRef.current = newLineOfWord;
-  }, [words.length]);
-
-  // Single rAF for all layout operations
-  const scheduleLayoutUpdate = useCallback(() => {
-    if (rafIdRef.current != null) {
+  // Schedule render with rAF
+  const scheduleRender = useCallback(() => {
+    if (rafIdRef.current) {
       cancelAnimationFrame(rafIdRef.current);
     }
     
     rafIdRef.current = requestAnimationFrame(() => {
       rafIdRef.current = null;
-      if (!isActive) return;
-      
-      // Batch all DOM reads
-      calculateLineIndices();
-      
-      // Batch all DOM writes
-      updateCaretPosition();
-      updateLineTranslation();
-      
-      pendingLayoutRef.current = false;
+      render();
+      pendingRenderRef.current = false;
     });
-  }, [isActive, calculateLineIndices]);
+  }, [render]);
 
-  // Update caret position (DOM reads + writes in one batch)
-  const updateCaretPosition = useCallback(() => {
-    if (!flowRef.current || !caretRef.current) return;
-
-    let targetElement: HTMLElement | null = null;
-
-    if (activeWord < words.length) {
-      const word = words[activeWord];
+  // Animate line transition
+  const animateLineTransition = useCallback((targetLine: number) => {
+    if (targetLine === currentLineRef.current) return;
+    
+    const { lineHeight } = fontMetricsRef.current;
+    const targetOffset = -targetLine * lineHeight;
+    const startOffset = verticalOffsetRef.current;
+    const startTime = Date.now();
+    const duration = 160; // 160ms transition
+    
+    const animate = () => {
+      const elapsed = Date.now() - startTime;
+      const progress = Math.min(elapsed / duration, 1);
       
-      if (activeChar < word.length) {
-        // Inside a word - target the character
-        const charKey = `${activeWord}-${activeChar}`;
-        targetElement = charRefs.current.get(charKey) || null;
+      // Ease out cubic
+      const eased = 1 - Math.pow(1 - progress, 3);
+      
+      verticalOffsetRef.current = startOffset + (targetOffset - startOffset) * eased;
+      
+      if (progress < 1) {
+        requestAnimationFrame(animate);
       } else {
-        // At end of word - target the space
-        targetElement = spaceRefs.current.get(activeWord) || null;
+        currentLineRef.current = targetLine;
+        verticalOffsetRef.current = targetOffset;
       }
-    }
-
-    if (targetElement) {
-      const rect = targetElement.getBoundingClientRect();
-      const flowRect = flowRef.current!.getBoundingClientRect();
       
-      const left = rect.left - flowRect.left;
-      const top = rect.top - flowRect.top;
-      const height = rect.height;
-      
-      const caret = caretRef.current!;
-      caret.style.transform = `translate3d(${left}px, ${top}px, 0)`;
-      caret.style.height = `${height}px`;
-    }
-  }, [activeWord, activeChar, words]);
-
-  // Update line translation (smooth upward movement)
-  const updateLineTranslation = useCallback(() => {
-    if (!flowRef.current || activeWord >= lineOfWordRef.current.length) return;
-    
-    const wordLine = lineOfWordRef.current[activeWord];
-    if (wordLine === undefined || wordLine === currentLineRef.current) return;
-
-    currentLineRef.current = wordLine;
-    const translateY = -wordLine * lineHeightRef.current;
-    flowRef.current.style.transform = `translate3d(0, ${translateY}px, 0)`;
-  }, [activeWord]);
-
-  // Get opacity for line virtualization
-  const getLineOpacity = useCallback((wordIdx: number) => {
-    if (wordIdx >= lineOfWordRef.current.length) return 1;
-    
-    const wordLine = lineOfWordRef.current[wordIdx];
-    const distance = Math.abs(wordLine - currentLineRef.current);
-    
-    if (distance <= 1) return 1; // Current, previous, and next line
-    return 0.35; // Dimmed for other lines
-  }, []);
-
-  // Initialize layout after mount
-  useEffect(() => {
-    if (isActive && wordRefs.current.size > 0) {
-      calculateLineIndices();
-      scheduleLayoutUpdate();
-    }
-  }, [isActive, calculateLineIndices, scheduleLayoutUpdate]);
-
-  // Handle font loading
-  useEffect(() => {
-    if (!isActive) return;
-    
-    const handleFontsReady = () => {
-      if (isActive) {
-        calculateLineIndices();
-        scheduleLayoutUpdate();
-      }
+      render();
     };
+    
+    animate();
+  }, [render]);
 
-    if (document.fonts && document.fonts.ready) {
-      document.fonts.ready.then(handleFontsReady).catch(() => {});
+  // Initialize canvas and layout
+  useEffect(() => {
+    if (isActive) {
+      initializeCanvas();
+      calculateWordLayouts();
+      scheduleRender();
     }
-  }, [isActive, calculateLineIndices, scheduleLayoutUpdate]);
+  }, [isActive, initializeCanvas, calculateWordLayouts, scheduleRender]);
+
+  // Update layout when words change
+  useEffect(() => {
+    if (isActive && words.length > 0) {
+      calculateWordLayouts();
+      if (!pendingRenderRef.current) {
+        pendingRenderRef.current = true;
+        scheduleRender();
+      }
+    }
+  }, [isActive, words, calculateWordLayouts, scheduleRender]);
+
+  // Handle active word/char changes
+  useEffect(() => {
+    if (isActive && activeWord < wordLayoutsRef.current.length) {
+      const layout = wordLayoutsRef.current[activeWord];
+      if (layout) {
+        animateLineTransition(layout.line);
+      }
+      
+      if (!pendingRenderRef.current) {
+        pendingRenderRef.current = true;
+        scheduleRender();
+      }
+    }
+  }, [isActive, activeWord, activeChar, animateLineTransition, scheduleRender]);
 
   // ResizeObserver with throttling
   useEffect(() => {
-    const flow = flowRef.current;
-    if (!flow) return;
+    const viewport = viewportRef.current;
+    if (!viewport) return;
 
     const ro = new ResizeObserver(() => {
       if (pendingResizeRef.current) return;
@@ -223,30 +366,23 @@ export const TypingViewport = forwardRef<TypingViewportRef, TypingViewportProps>
       requestAnimationFrame(() => {
         pendingResizeRef.current = false;
         if (isActive) {
-          calculateLineIndices();
-          scheduleLayoutUpdate();
+          initializeCanvas();
+          calculateWordLayouts();
+          scheduleRender();
         }
       });
     });
     
-    ro.observe(flow);
+    ro.observe(viewport);
     resizeObserver.current = ro;
     
     return () => {
       ro.disconnect();
       resizeObserver.current = null;
     };
-  }, [isActive, calculateLineIndices, scheduleLayoutUpdate]);
+  }, [isActive, initializeCanvas, calculateWordLayouts, scheduleRender]);
 
-  // Update layout on active word/char changes
-  useEffect(() => {
-    if (isActive && !pendingLayoutRef.current) {
-      pendingLayoutRef.current = true;
-      scheduleLayoutUpdate();
-    }
-  }, [activeWord, activeChar, isActive, scheduleLayoutUpdate]);
-
-  // Handle pointer events to refocus (no blur loop)
+  // Handle pointer events to refocus
   useEffect(() => {
     const el = trapRef.current;
     if (!el) return;
@@ -266,46 +402,41 @@ export const TypingViewport = forwardRef<TypingViewportRef, TypingViewportProps>
     };
   }, []);
 
-  // Input event handlers (minimal, no setState)
+  // Input event handlers
   const handleInput = useCallback((e: React.FormEvent<HTMLInputElement>) => {
     if (!isActive || isComposingRef.current) return;
     
     const target = e.target as HTMLInputElement;
     if (target.value) {
       onCharacterInput(target.value);
-      target.value = ''; // Clear the input
+      target.value = '';
     }
   }, [isActive, onCharacterInput]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (!isActive) return;
 
-    // Prevent default for control keys
     if (e.key === 'Tab' || e.key === 'Enter') {
       e.preventDefault();
       return;
     }
 
-    // Handle Space
     if (e.key === ' ') {
       e.preventDefault();
       onSpace();
       return;
     }
 
-    // Handle Backspace
     if (e.key === 'Backspace') {
       e.preventDefault();
       onBackspace();
       return;
     }
 
-    // Allow Ctrl+C for copy
     if (e.ctrlKey && e.key === 'c') {
       return;
     }
 
-    // Prevent other Ctrl/Cmd shortcuts
     if (e.ctrlKey || e.metaKey) {
       e.preventDefault();
     }
@@ -321,26 +452,6 @@ export const TypingViewport = forwardRef<TypingViewportRef, TypingViewportProps>
     onCompositionEnd();
   }, [onCompositionEnd]);
 
-  // Store refs for performance
-  const setWordRef = useCallback((wordIdx: number, element: HTMLSpanElement | null) => {
-    if (element) {
-      wordRefs.current.set(wordIdx, element);
-    }
-  }, []);
-
-  const setCharRef = useCallback((wordIdx: number, charIdx: number, element: HTMLSpanElement | null) => {
-    if (element) {
-      const key = `${wordIdx}-${charIdx}`;
-      charRefs.current.set(key, element);
-    }
-  }, []);
-
-  const setSpaceRef = useCallback((wordIdx: number, element: HTMLSpanElement | null) => {
-    if (element) {
-      spaceRefs.current.set(wordIdx, element);
-    }
-  }, []);
-
   return (
     <section className="test-root">
       <div 
@@ -354,85 +465,18 @@ export const TypingViewport = forwardRef<TypingViewportRef, TypingViewportProps>
           overflow: 'hidden',
           border: '1px solid #374151',
           borderRadius: '0.5rem',
-          backgroundColor: 'rgba(17, 24, 39, 0.5)'
+          backgroundColor: 'rgba(17, 24, 39, 0.5)',
+          padding: '1rem'
         }}
       >
-        <div 
-          className="flow" 
-          ref={flowRef}
+        <canvas
+          ref={canvasRef}
           style={{
-            position: 'relative',
+            display: 'block',
             width: '100%',
-            height: '100%',
-            padding: '1rem',
-            willChange: 'transform',
-            transition: 'transform 160ms ease',
-            fontFamily: "'JetBrains Mono', 'Fira Code', 'Consolas', monospace",
-            fontSize: '1.125rem',
-            lineHeight: '1.75',
-            color: '#e5e7eb',
-            wordWrap: 'break-word',
-            whiteSpace: 'pre-wrap',
-            overflowWrap: 'break-word'
+            height: '100%'
           }}
-        >
-          {words.map((word, wordIdx) => (
-            <span 
-              key={wordIdx}
-              className="word" 
-              data-w={wordIdx}
-              ref={(el) => setWordRef(wordIdx, el)}
-              style={{ 
-                opacity: getLineOpacity(wordIdx),
-                display: 'inline',
-                whiteSpace: 'pre-wrap',
-                wordBreak: 'break-word'
-              }}
-            >
-              {word.split('').map((char, charIdx) => {
-                const state = charState[wordIdx]?.[charIdx] || 'pending';
-                return (
-                  <span
-                    key={charIdx}
-                    className={`char ${state}`}
-                    data-c={charIdx}
-                    ref={(el) => setCharRef(wordIdx, charIdx, el)}
-                    style={{
-                      position: 'relative',
-                      display: 'inline',
-                      transition: 'color 0.1s ease'
-                    }}
-                  >
-                    {char}
-                  </span>
-                );
-              })}
-              <span 
-                className={`space ${charState[wordIdx]?.[word.length] || 'pending'}`}
-                ref={(el) => setSpaceRef(wordIdx, el)}
-                style={{
-                  display: 'inline',
-                  transition: 'color 0.1s ease'
-                }}
-              >
-                {' '}
-              </span>
-            </span>
-          ))}
-          <span 
-            id="caret" 
-            ref={caretRef} 
-            aria-hidden
-            style={{
-              position: 'absolute',
-              width: '2px',
-              backgroundColor: '#10b981',
-              transition: 'none',
-              pointerEvents: 'none',
-              zIndex: 10
-            }}
-          />
-        </div>
+        />
       </div>
 
       <input
