@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { TypingViewport } from './TypingViewport';
+import { TypingViewport, TypingViewportRef } from './TypingViewport';
 import { TestConfig } from './TestConfig';
 import { AnalyticsDashboard } from './AnalyticsDashboard';
 import { SessionHistory } from './SessionHistory';
@@ -57,6 +57,8 @@ export const TypingTest = () => {
     customWordLimit: 25
   });
   const [isTestActive, setIsTestActive] = useState(false);
+  const [isRunning, setIsRunning] = useState(false);
+  const [isEnded, setIsEnded] = useState(false);
   const [expectedText, setExpectedText] = useState('');
   const [currentPosition, setCurrentPosition] = useState(0);
   const [typedCharacters, setTypedCharacters] = useState<string[]>([]);
@@ -120,6 +122,8 @@ export const TypingTest = () => {
   // Refs
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const testEndedRef = useRef(false);
+  const isStartingRef = useRef(false);
+  const typingViewportRef = useRef<TypingViewportRef>(null);
 
   // Generate text for current mode
   const generateTextForMode = useCallback(() => {
@@ -150,59 +154,105 @@ export const TypingTest = () => {
     return generateText(options);
   }, [testSettings]);
 
-  // Start test function
+  // Start test function - optimized to prevent UI freeze
   const startTest = useCallback(() => {
-    setIsTestActive(true);
+    // Re-entrancy guard
+    if (isStartingRef.current || isRunning) return;
+    isStartingRef.current = true;
+    
+    // Immediate UI feedback - disable button and show loading state
+    setIsRunning(true);
+    setIsTestActive(false);
     setShowResults(false);
+    setIsEnded(false);
     testEndedRef.current = false;
     
-    const textToType = generateTextForMode();
-    setExpectedText(textToType);
-    setCurrentPosition(0);
-    setTypedCharacters(new Array(textToType.length).fill(''));
-    setCharacterStatus(new Array(textToType.length).fill('pending'));
-    
-    // Initialize word-based tracking
-    const words = textToType.split(' ');
-    setWordList(words);
-    setActiveWordIdx(0);
-    setActiveCharIdx(0);
-    
-    // Initialize character states
-    const initialCharStates = words.map(word => 
-      new Array(word.length + 1).fill('pending') // +1 for space
-    );
-    setCharStates(initialCharStates);
-    
-    setCorrectCharacters(0);
-    setTotalTypedCharacters(0);
-    setBackspaces(0);
-    setWordsCompleted(0);
-    setLiveWPM(0);
-    setAnalytics_wpmTimeline([]);
-    setAnalytics_correctCharsSoFar(0);
-    setKeystrokeLog([]);
-    
-    if (testSettings.mode === 'time' || (testSettings.mode === 'custom' && testSettings.customUseTime)) {
-      setTimeRemaining(testSettings.duration);
-      setTestStartTime(Date.now());
-      
-      timerRef.current = setInterval(() => {
-        setTimeRemaining(prev => {
-          if (prev <= 1) {
-            endTest();
-            return 0;
+    // Use setTimeout to defer heavy work and allow UI to update
+    setTimeout(() => {
+      try {
+        // Generate text and prepare data
+        const textToType = generateTextForMode();
+        const words = textToType.split(' ');
+        const initialCharStates = words.map(word => 
+          new Array(word.length + 1).fill('pending') // +1 for space
+        );
+        
+        // Batch state updates to minimize re-renders
+        const updates = () => {
+          setExpectedText(textToType);
+          setWordList(words);
+          setCharStates(initialCharStates);
+          setActiveWordIdx(0);
+          setActiveCharIdx(0);
+          setCurrentPosition(0);
+          setTypedCharacters(new Array(textToType.length).fill(''));
+          setCharacterStatus(new Array(textToType.length).fill('pending'));
+          
+          // Reset metrics
+          setCorrectCharacters(0);
+          setTotalTypedCharacters(0);
+          setBackspaces(0);
+          setWordsCompleted(0);
+          setLiveWPM(0);
+          setAnalytics_wpmTimeline([]);
+          setAnalytics_correctCharsSoFar(0);
+          setKeystrokeLog([]);
+          setFirstKeystrokeTime(null);
+        };
+        
+        // Execute updates and then activate test
+        updates();
+        
+        // Start timer if needed
+        if (testSettings.mode === 'time' || (testSettings.mode === 'custom' && testSettings.customUseTime)) {
+          setTimeRemaining(testSettings.duration);
+          setTestStartTime(Date.now());
+          
+          timerRef.current = setInterval(() => {
+            setTimeRemaining(prev => {
+              if (prev <= 1) {
+                // End test when timer reaches 0
+                if (testEndedRef.current) return 0;
+                testEndedRef.current = true;
+                setIsEnded(true);
+                if (timerRef.current) {
+                  clearInterval(timerRef.current);
+                }
+                setIsRunning(false);
+                isStartingRef.current = false;
+                setShowResults(true);
+                setIsTestActive(false);
+                return 0;
+              }
+              return prev - 1;
+            });
+          }, 1000);
+        } else {
+          setTestStartTime(Date.now());
+        }
+        
+        // Activate test and focus input
+        setIsTestActive(true);
+        
+        // Focus input after a short delay to ensure DOM is ready
+        setTimeout(() => {
+          if (typingViewportRef.current) {
+            typingViewportRef.current.focus();
           }
-          return prev - 1;
-        });
-      }, 1000);
-    } else {
-      setTestStartTime(Date.now());
-    }
+        }, 50);
+        
+      } catch (error) {
+        console.error('Error starting test:', error);
+        // Reset state on error
+        isStartingRef.current = false;
+        setIsRunning(false);
+        setIsTestActive(false);
+      }
+    }, 0); // Use 0ms timeout to defer to next tick
   }, [testSettings, generateTextForMode]);
 
-  // End test function
-  const endTest = useCallback(() => {
+  // Finalize test function
+  const finalizeTest = useCallback(() => {
     if (testEndedRef.current) return;
     testEndedRef.current = true;
     
@@ -281,9 +331,11 @@ export const TypingTest = () => {
       insights
     );
     
-    setShowResults(true);
+    setIsRunning(false); // re-enable Start button
+    isStartingRef.current = false; // allow next run
+    setShowResults(true); // auto-open results
     setIsTestActive(false);
-  }, [testStartTime, testSettings, correctCharacters, totalTypedCharacters, backspaces, analytics_wpmTimeline, keystrokeLog, firstKeystrokeTime]);
+  }, [testStartTime, testSettings, correctCharacters, totalTypedCharacters, backspaces, analytics_wpmTimeline, keystrokeLog, firstKeystrokeTime, activeWordIdx, activeCharIdx, wordList]);
 
   // Handle character input
   const handleCharacterInput = useCallback((char: string) => {
@@ -510,19 +562,38 @@ export const TypingTest = () => {
           <AnalyticsDashboard />
         ) : (
           <>
-            {!isTestActive && !showResults && (
+            {!isTestActive && (
               <div className="space-y-6">
                 <div className="text-center">
-                  <TestConfig settings={testSettings} onSettingsChange={setTestSettings} onStartTest={startTest} />
+                  <TestConfig settings={testSettings} onSettingsChange={setTestSettings} />
                 </div>
                 <div className="text-center">
                   <Button 
+                    id="start-test"
+                    type="button"
+                    aria-label="Start Test"
+                    disabled={isRunning}
                     onClick={startTest}
-                    className="bg-cyan-600 hover:bg-cyan-700 text-white border border-cyan-500 shadow-lg shadow-cyan-500/25 px-8 py-3 text-lg btn-hover btn-active"
+                    className="bg-cyan-600 hover:bg-cyan-700 text-white border border-cyan-500 shadow-lg shadow-cyan-500/25 px-8 py-3 text-lg btn-hover btn-active disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    Start Test
+                    {isRunning ? 'Starting...' : 'Start Test'}
                   </Button>
                 </div>
+              </div>
+            )}
+
+            {showResults && (
+              <div className="text-center mb-6">
+                <Button 
+                  id="start-test"
+                  type="button"
+                  aria-label="Start Test"
+                  disabled={isRunning}
+                  onClick={startTest}
+                  className="bg-cyan-600 hover:bg-cyan-700 text-white border border-cyan-500 shadow-lg shadow-cyan-500/25 px-8 py-3 text-lg btn-hover btn-active disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isRunning ? 'Starting...' : 'Start New Test'}
+                </Button>
               </div>
             )}
 
@@ -555,6 +626,7 @@ export const TypingTest = () => {
                       />
                     ) : (
                       <TypingViewport
+                        ref={typingViewportRef}
                         words={wordList}
                         activeWord={activeWordIdx}
                         activeChar={activeCharIdx}
@@ -572,7 +644,7 @@ export const TypingTest = () => {
                     {isTestActive && (
                       <div className="mt-4 text-center">
                         <Button
-                          onClick={endTest}
+                          onClick={finalizeTest}
                           className="px-6 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors font-medium"
                         >
                           End Test

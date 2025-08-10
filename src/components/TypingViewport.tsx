@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, forwardRef, useImperativeHandle } from 'react';
 
 interface TypingViewportProps {
   words: string[];
@@ -13,7 +13,11 @@ interface TypingViewportProps {
   isActive: boolean;
 }
 
-export const TypingViewport = ({
+export interface TypingViewportRef {
+  focus: () => void;
+}
+
+export const TypingViewport = forwardRef<TypingViewportRef, TypingViewportProps>(({
   words,
   activeWord,
   activeChar,
@@ -24,7 +28,7 @@ export const TypingViewport = ({
   onCompositionStart,
   onCompositionEnd,
   isActive
-}: TypingViewportProps) => {
+}, ref) => {
   const viewportRef = useRef<HTMLDivElement>(null);
   const flowRef = useRef<HTMLDivElement>(null);
   const caretRef = useRef<HTMLSpanElement>(null);
@@ -40,6 +44,15 @@ export const TypingViewport = ({
   const [currentLine, setCurrentLine] = useState(0);
   const [lineHeight, setLineHeight] = useState(0);
   const resizeObserver = useRef<ResizeObserver | null>(null);
+
+  // Expose focus method
+  useImperativeHandle(ref, () => ({
+    focus: () => {
+      if (trapRef.current) {
+        trapRef.current.focus();
+      }
+    }
+  }));
 
   // Calculate line indices for each word
   const calculateLineIndices = useCallback(() => {
@@ -146,39 +159,37 @@ export const TypingViewport = ({
     };
   }, [calculateLineIndices, batchUpdates]);
 
-  // Calculate line indices after initial render
+  // Combined effect for initialization and updates
   useEffect(() => {
+    if (!isActive) return;
+    
+    // Initialize line indices if needed
     if (wordRefs.current.size > 0) {
       calculateLineIndices();
     }
-  }, [calculateLineIndices]);
-
-  // Handle font loading
-  useEffect(() => {
-    const handleFontsReady = () => {
-      calculateLineIndices();
-      batchUpdates();
-    };
-
+    
+    // Handle font loading once
     if (document.fonts && document.fonts.ready) {
-      document.fonts.ready.then(handleFontsReady);
-    } else {
-      // Fallback for older browsers
-      setTimeout(handleFontsReady, 100);
+      document.fonts.ready.then(() => {
+        if (isActive) {
+          calculateLineIndices();
+          batchUpdates();
+        }
+      }).catch(() => {});
     }
-  }, [calculateLineIndices, batchUpdates]);
-
-  // Update on active word/char changes
-  useEffect(() => {
-    batchUpdates();
-  }, [activeWord, activeChar, batchUpdates]);
-
-  // Focus management
-  useEffect(() => {
-    if (isActive && trapRef.current) {
+    
+    // Focus input
+    if (trapRef.current) {
       trapRef.current.focus();
     }
-  }, [isActive]);
+  }, [isActive, calculateLineIndices, batchUpdates]);
+
+  // Update on active word/char changes (only when active)
+  useEffect(() => {
+    if (isActive) {
+      batchUpdates();
+    }
+  }, [activeWord, activeChar, batchUpdates, isActive]);
 
   // Handle clicks to refocus
   const handleViewportClick = useCallback(() => {
@@ -240,12 +251,15 @@ export const TypingViewport = ({
     onCompositionEnd();
   }, [onCompositionEnd]);
 
-  // Prevent blur unless test is ended
-  const handleBlur = useCallback((e: React.FocusEvent) => {
-    if (isActive) {
-      e.preventDefault();
-      e.target.focus();
-    }
+  // Handle pointer events to refocus (no blur loop)
+  useEffect(() => {
+    const el = trapRef.current;
+    if (!el) return;
+    
+    const refocus = () => isActive && el.focus({ preventScroll: true });
+    viewportRef.current?.addEventListener('pointerdown', refocus);
+    
+    return () => viewportRef.current?.removeEventListener('pointerdown', refocus);
   }, [isActive]);
 
   // Store refs for performance
@@ -333,8 +347,7 @@ export const TypingViewport = ({
         onKeyDown={handleKeyDown}
         onCompositionStart={handleCompositionStart}
         onCompositionEnd={handleCompositionEnd}
-        onBlur={handleBlur}
       />
     </section>
   );
-};
+});

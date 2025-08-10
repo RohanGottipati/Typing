@@ -5,10 +5,9 @@ import { TestSettings } from './TypingTest';
 interface TestConfigProps {
   settings: TestSettings;
   onSettingsChange: (settings: TestSettings) => void;
-  onStartTest: () => void;
 }
 
-export const TestConfig = ({ settings, onSettingsChange, onStartTest }: TestConfigProps) => {
+export const TestConfig = ({ settings, onSettingsChange }: TestConfigProps) => {
   const [localSettings, setLocalSettings] = useState<TestSettings>(settings);
   const [customWordCount, setCustomWordCount] = useState(localSettings.wordCount || 25);
 
@@ -283,17 +282,6 @@ export const TestConfig = ({ settings, onSettingsChange, onStartTest }: TestConf
             </div>
           )}
         </div>
-      </div>
-
-      {/* Start Test Button */}
-      <div className="text-center">
-        <Button
-          onClick={onStartTest}
-          className="bg-cyan-600 hover:bg-cyan-700 text-white border border-cyan-500 shadow-lg shadow-cyan-500/25 px-8 py-3 text-lg btn-hover btn-active"
-          size="lg"
-        >
-          Start Test
-        </Button>
       </div>
     </div>
   );
