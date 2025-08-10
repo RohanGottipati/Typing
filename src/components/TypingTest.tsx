@@ -76,6 +76,7 @@ export const TypingTest = () => {
   const [testStartTime, setTestStartTime] = useState<number | null>(null);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [isCountingDown, setIsCountingDown] = useState(false);
+  const [showCountdown, setShowCountdown] = useState(false);
   
   // Statistics
   const [correctCharacters, setCorrectCharacters] = useState(0);
@@ -127,30 +128,48 @@ export const TypingTest = () => {
 
   // Generate text for current mode
   const generateTextForMode = useCallback(() => {
+    // Custom mode with custom text
     if (testSettings.mode === 'custom' && testSettings.customText) {
       return testSettings.customText;
     }
     
+    // Words mode or custom mode with word limit
     if (testSettings.mode === 'words' || (testSettings.mode === 'custom' && testSettings.customUseWords)) {
+      const wordCount = testSettings.mode === 'words' ? testSettings.wordCount : testSettings.customWordLimit;
       const options: TextGeneratorOptions = {
         includeNumbers: testSettings.numbers,
         includePunctuation: testSettings.punctuation,
-        targetWordCount: testSettings.wordCount
+        targetWordCount: wordCount
       };
-      return generateExactWordCount(testSettings.wordCount, options);
+      return generateExactWordCount(wordCount || 25, options);
     }
     
+    // Quote mode
     if (testSettings.mode === 'quote') {
       const quote = getRandomQuote();
       setQuoteAuthor(quote.author);
       return quote.text;
     }
     
+    // Time mode or custom mode with time limit
+    if (testSettings.mode === 'time' || (testSettings.mode === 'custom' && testSettings.customUseTime)) {
+      const options: TextGeneratorOptions = {
+        includeNumbers: testSettings.numbers,
+        includePunctuation: testSettings.punctuation
+      };
+      return generateText(options);
+    }
+    
+    // Zen mode - return empty string, will be handled by textarea
+    if (testSettings.mode === 'zen') {
+      return '';
+    }
+    
+    // Default fallback
     const options: TextGeneratorOptions = {
       includeNumbers: testSettings.numbers,
       includePunctuation: testSettings.punctuation
     };
-    
     return generateText(options);
   }, [testSettings]);
 
@@ -200,46 +219,73 @@ export const TypingTest = () => {
           setFirstKeystrokeTime(null);
         };
         
-        // Execute updates and then activate test
+        // Execute updates
         updates();
         
-        // Start timer if needed
+        // Handle different modes
         if (testSettings.mode === 'time' || (testSettings.mode === 'custom' && testSettings.customUseTime)) {
+          // Time mode: Start countdown
           setTimeRemaining(testSettings.duration);
-          setTestStartTime(Date.now());
+          setShowCountdown(true);
+          setCountdown(3);
+          setIsCountingDown(true);
           
-          timerRef.current = setInterval(() => {
-            setTimeRemaining(prev => {
-              if (prev <= 1) {
-                // End test when timer reaches 0
-                if (testEndedRef.current) return 0;
-                testEndedRef.current = true;
-                setIsEnded(true);
-                if (timerRef.current) {
-                  clearInterval(timerRef.current);
-                }
-                setIsRunning(false);
-                isStartingRef.current = false;
-                setShowResults(true);
-                setIsTestActive(false);
-                return 0;
+          // Countdown timer
+          const countdownTimer = setInterval(() => {
+            setCountdown(prev => {
+              if (prev === null || prev <= 1) {
+                clearInterval(countdownTimer);
+                setShowCountdown(false);
+                setIsCountingDown(false);
+                setTestStartTime(Date.now());
+                
+                // Start the actual test timer
+                timerRef.current = setInterval(() => {
+                  setTimeRemaining(prev => {
+                    if (prev <= 1) {
+                      // End test when timer reaches 0
+                      if (testEndedRef.current) return 0;
+                      testEndedRef.current = true;
+                      setIsEnded(true);
+                      if (timerRef.current) {
+                        clearInterval(timerRef.current);
+                      }
+                      setIsRunning(false);
+                      isStartingRef.current = false;
+                      setShowResults(true);
+                      setIsTestActive(false);
+                      return 0;
+                    }
+                    return prev - 1;
+                  });
+                }, 1000);
+                
+                // Activate test and focus input
+                setIsTestActive(true);
+                setTimeout(() => {
+                  if (typingViewportRef.current) {
+                    typingViewportRef.current.focus();
+                  }
+                }, 50);
+                
+                return null;
               }
               return prev - 1;
             });
           }, 1000);
+          
         } else {
+          // Non-time modes: Start immediately
           setTestStartTime(Date.now());
+          setIsTestActive(true);
+          
+          // Focus input after a short delay to ensure DOM is ready
+          setTimeout(() => {
+            if (typingViewportRef.current) {
+              typingViewportRef.current.focus();
+            }
+          }, 50);
         }
-        
-        // Activate test and focus input
-        setIsTestActive(true);
-        
-        // Focus input after a short delay to ensure DOM is ready
-        setTimeout(() => {
-          if (typingViewportRef.current) {
-            typingViewportRef.current.focus();
-          }
-        }, 50);
         
       } catch (error) {
         console.error('Error starting test:', error);
@@ -247,6 +293,8 @@ export const TypingTest = () => {
         isStartingRef.current = false;
         setIsRunning(false);
         setIsTestActive(false);
+        setShowCountdown(false);
+        setIsCountingDown(false);
       }
     }, 0); // Use 0ms timeout to defer to next tick
   }, [testSettings, generateTextForMode]);
@@ -337,6 +385,50 @@ export const TypingTest = () => {
     setIsTestActive(false);
   }, [testStartTime, testSettings, correctCharacters, totalTypedCharacters, backspaces, analytics_wpmTimeline, keystrokeLog, firstKeystrokeTime, activeWordIdx, activeCharIdx, wordList]);
 
+  // Check for test completion based on mode
+  const checkTestCompletion = useCallback(() => {
+    if (!isTestActive || testEndedRef.current) return;
+    
+    let shouldEnd = false;
+    
+    switch (testSettings.mode) {
+      case 'words':
+      case 'custom':
+        // Words mode: End when last character of target word count is typed
+        if (testSettings.mode === 'words' && activeWordIdx >= (testSettings.wordCount || 25) - 1) {
+          const targetWord = wordList[testSettings.wordCount! - 1];
+          if (activeCharIdx >= targetWord.length) {
+            shouldEnd = true;
+          }
+        } else if (testSettings.mode === 'custom' && testSettings.customUseWords && activeWordIdx >= (testSettings.customWordLimit || 25) - 1) {
+          const targetWord = wordList[testSettings.customWordLimit! - 1];
+          if (activeCharIdx >= targetWord.length) {
+            shouldEnd = true;
+          }
+        }
+        break;
+        
+      case 'quote':
+        // Quote mode: End when last character of quote is typed
+        if (activeWordIdx >= wordList.length - 1) {
+          const lastWord = wordList[wordList.length - 1];
+          if (activeCharIdx >= lastWord.length) {
+            shouldEnd = true;
+          }
+        }
+        break;
+        
+      case 'time':
+      case 'zen':
+        // Time mode: Timer handles ending, Zen mode: Manual end only
+        break;
+    }
+    
+    if (shouldEnd) {
+      finalizeTest();
+    }
+  }, [isTestActive, testSettings, activeWordIdx, activeCharIdx, wordList, finalizeTest]);
+
   // Handle character input
   const handleCharacterInput = useCallback((char: string) => {
     if (!isTestActive || isCountingDown || isComposing) return;
@@ -413,6 +505,9 @@ export const TypingTest = () => {
           return newTimeline;
         });
       }
+      
+      // Check for test completion based on mode
+      checkTestCompletion();
     }
   }, [isTestActive, isCountingDown, isComposing, firstKeystrokeTime, testStartTime, activeWordIdx, activeCharIdx, wordList, currentPosition, analytics_correctCharsSoFar]);
 
@@ -449,8 +544,11 @@ export const TypingTest = () => {
       }
       
       setTotalTypedCharacters(prev => prev + 1);
+      
+      // Check for test completion after space
+      setTimeout(() => checkTestCompletion(), 0);
     }
-  }, [isTestActive, isCountingDown, isComposing, activeWordIdx, activeCharIdx, wordList]);
+  }, [isTestActive, isCountingDown, isComposing, activeWordIdx, activeCharIdx, wordList, checkTestCompletion]);
 
   // Handle backspace
   const handleBackspace = useCallback(() => {
@@ -599,14 +697,42 @@ export const TypingTest = () => {
 
             {isTestActive && (
               <div className="space-y-6">
+                {/* Countdown Display */}
+                {showCountdown && countdown !== null && (
+                  <Card className="bg-gray-900 border border-cyan-600 shadow-lg shadow-cyan-500/25 sticky top-0 z-10">
+                    <CardContent className="p-4">
+                      <div className="text-center">
+                        <h2 className="text-lg font-semibold text-cyan-100 mb-2">Get Ready</h2>
+                        <div className="text-6xl font-mono text-cyan-400 animate-pulse">
+                          {countdown}
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
+
                 {/* Timer Display */}
-                {(testSettings.mode === 'time' || (testSettings.mode === 'custom' && testSettings.customUseTime)) && (
+                {(testSettings.mode === 'time' || (testSettings.mode === 'custom' && testSettings.customUseTime)) && !showCountdown && (
                   <Card className="bg-gray-900 border border-cyan-600 shadow-lg shadow-cyan-500/25 sticky top-0 z-10">
                     <CardContent className="p-4">
                       <div className="text-center">
                         <h2 className="text-lg font-semibold text-cyan-100 mb-2">Time Remaining</h2>
                         <div className="text-3xl font-mono text-cyan-400">
                           {Math.floor(timeRemaining / 60)}:{(timeRemaining % 60).toString().padStart(2, '0')}
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
+
+                {/* Live WPM Display for Zen Mode */}
+                {testSettings.mode === 'zen' && isTestActive && !showCountdown && (
+                  <Card className="bg-gray-900 border border-cyan-600 shadow-lg shadow-cyan-500/25 sticky top-0 z-10">
+                    <CardContent className="p-4">
+                      <div className="text-center">
+                        <h2 className="text-lg font-semibold text-cyan-100 mb-2">Live WPM</h2>
+                        <div className="text-3xl font-mono text-cyan-400">
+                          {Math.round(liveWPM)}
                         </div>
                       </div>
                     </CardContent>
