@@ -1,31 +1,608 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { TypingArea } from './TypingArea';
+import { TestConfig } from './TestConfig';
+import { AnalyticsDashboard } from './AnalyticsDashboard';
+import { SessionHistory } from './SessionHistory';
+import { BehavioralInsights } from './BehavioralInsights';
+import { ErrorAnalysis } from './ErrorAnalysis';
+import { WPMPrediction } from './WPMPrediction';
+import { generateText, generateExactWordCount, TextGeneratorOptions } from '@/lib/textGenerator';
+import { getRandomQuote } from '@/lib/quotesData';
+import { saveSession, getSessions } from '@/lib/sessionStorage';
+import { calculateBehavioralMetrics } from '@/lib/behavioralMetrics';
+import { analyzeTypingPersona, getPersonaInsights } from '@/lib/typingPersonas';
+import { exportToCSV, exportToJSON } from '@/lib/exportUtils';
+
+export interface TestSettings {
+  duration: number;
+  textType: 'sentences' | 'quotes' | 'code';
+  mode: 'time' | 'words' | 'quote' | 'zen' | 'custom';
+  punctuation: boolean;
+  numbers: boolean;
+  wordCount?: number;
+  customText?: string;
+  customUseTime?: boolean;
+  customUseWords?: boolean;
+  customTimeLimit?: number;
+  customWordLimit?: number;
+}
+
+export interface KeystrokeData {
+  key: string;
+  keyId: string;
+  correct: boolean;
+  timestamp: number;
+  position: number;
+  latency?: number;
+}
 
 export const TypingTest = () => {
-  const [text, setText] = useState('');
+  // View state
+  const [currentView, setCurrentView] = useState<'main' | 'analytics'>('main');
+  
+  // Test state
+  const [testSettings, setTestSettings] = useState<TestSettings>({ 
+    duration: 30, 
+    textType: 'sentences',
+    mode: 'time',
+    punctuation: true,
+    numbers: true,
+    wordCount: 25,
+    customText: '',
+    customUseTime: false,
+    customUseWords: false,
+    customTimeLimit: 30,
+    customWordLimit: 25
+  });
+  const [isTestActive, setIsTestActive] = useState(false);
+  const [expectedText, setExpectedText] = useState('');
+  const [currentPosition, setCurrentPosition] = useState(0);
+  const [typedCharacters, setTypedCharacters] = useState<string[]>([]);
+  const [characterStatus, setCharacterStatus] = useState<('correct' | 'incorrect' | '')[]>([]);
+  
+  // Timer state
+  const [timeRemaining, setTimeRemaining] = useState(0);
+  const [testStartTime, setTestStartTime] = useState<number | null>(null);
+  const [countdown, setCountdown] = useState<number | null>(null);
+  const [isCountingDown, setIsCountingDown] = useState(false);
+  
+  // Statistics
+  const [correctCharacters, setCorrectCharacters] = useState(0);
+  const [totalTypedCharacters, setTotalTypedCharacters] = useState(0);
+  const [backspaces, setBackspaces] = useState(0);
+  const [missedCharacters, setMissedCharacters] = useState<{ [key: string]: number }>({});
+  const [wordsCompleted, setWordsCompleted] = useState(0);
+  const [quoteAuthor, setQuoteAuthor] = useState('');
+  const [liveWPM, setLiveWPM] = useState(0);
+  const [firstKeystrokeTime, setFirstKeystrokeTime] = useState<number | null>(null);
+  
+  // Analytics tracking
+  const [analytics_wpmTimeline, setAnalytics_wpmTimeline] = useState<Array<{ second: number, wpm: number }>>([]);
+  const [analytics_correctCharsSoFar, setAnalytics_correctCharsSoFar] = useState(0);
+  
+  // Results state
+  const [showResults, setShowResults] = useState(false);
+  const [finalWPM, setFinalWPM] = useState(0);
+  const [finalAccuracy, setFinalAccuracy] = useState(0);
+  const [behavioralMetrics, setBehavioralMetrics] = useState<{
+    typingConsistencyScore: number;
+    fatigueScore: number;
+    reactionDelay: number;
+    topErrorHotspots: { second: number; count: number }[];
+    topBackspaceHotspots: { second: number; count: number }[];
+  }>({
+    typingConsistencyScore: 0,
+    fatigueScore: 0,
+    reactionDelay: 0,
+    topErrorHotspots: [],
+    topBackspaceHotspots: []
+  });
+  const [typingPersona, setTypingPersona] = useState<any>(null);
+  const [personaInsights, setPersonaInsights] = useState<string[]>([]);
+  
+  // Zen mode state
+  const [zenContent, setZenContent] = useState('');
+  
+  // Keystroke tracking
+  const [keystrokeLog, setKeystrokeLog] = useState<KeystrokeData[]>([]);
+  
+  // Refs for cleanup
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const testEndedRef = useRef(false);
+
+  // Generate text based on settings
+  const generateTextForMode = useCallback(() => {
+    if (testSettings.mode === 'custom' && testSettings.customText) {
+      return testSettings.customText;
+    }
+    
+    if (testSettings.mode === 'words' && testSettings.wordCount) {
+      const options: TextGeneratorOptions = {
+        includeNumbers: testSettings.numbers,
+        includePunctuation: testSettings.punctuation,
+        targetWordCount: testSettings.wordCount
+      };
+      return generateExactWordCount(testSettings.wordCount, options);
+    }
+    
+    if (testSettings.mode === 'quote') {
+      const quote = getRandomQuote();
+      setQuoteAuthor(quote.author);
+      return quote.text;
+    }
+    
+    const options: TextGeneratorOptions = {
+      includeNumbers: testSettings.numbers,
+      includePunctuation: testSettings.punctuation
+    };
+    
+    return generateText(options);
+  }, [testSettings]);
+
+  // Start test function
+  const startTest = useCallback(() => {
+    setIsTestActive(true);
+    setShowResults(false);
+    testEndedRef.current = false;
+    
+    const textToType = generateTextForMode();
+    setExpectedText(textToType);
+    setCurrentPosition(0);
+    setTypedCharacters(new Array(textToType.length).fill(''));
+    setCharacterStatus(new Array(textToType.length).fill(''));
+    
+    setCorrectCharacters(0);
+    setTotalTypedCharacters(0);
+    setBackspaces(0);
+    setWordsCompleted(0);
+    setLiveWPM(0);
+    setAnalytics_wpmTimeline([]);
+    setAnalytics_correctCharsSoFar(0);
+    setKeystrokeLog([]);
+    
+    if (testSettings.mode === 'time' || (testSettings.mode === 'custom' && testSettings.customUseTime)) {
+      setTimeRemaining(testSettings.duration);
+      setTestStartTime(Date.now());
+      
+      timerRef.current = setInterval(() => {
+        setTimeRemaining(prev => {
+          if (prev <= 1) {
+            endTest();
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+    } else {
+      setTestStartTime(Date.now());
+    }
+  }, [testSettings, generateTextForMode]);
+
+  // End test function
+  const endTest = useCallback(() => {
+    if (testEndedRef.current) return;
+    testEndedRef.current = true;
+    
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+    }
+    
+    const testDurationMs = testStartTime ? Date.now() - testStartTime : 0;
+    const testDurationMinutes = testDurationMs / 60000;
+    
+    const finalWPMValue = testDurationMinutes > 0 ? (correctCharacters / 5) / testDurationMinutes : 0;
+    const finalAccuracyValue = totalTypedCharacters > 0 ? (correctCharacters / totalTypedCharacters) * 100 : 0;
+    
+    setFinalWPM(Math.round(finalWPMValue));
+    setFinalAccuracy(Math.round(finalAccuracyValue * 10) / 10);
+    
+    // Calculate behavioral metrics
+    const metrics = calculateBehavioralMetrics(keystrokeLog, analytics_wpmTimeline);
+    setBehavioralMetrics(metrics);
+    
+    // Analyze typing persona
+    const persona = analyzeTypingPersona(finalWPMValue, finalAccuracyValue, metrics);
+    setTypingPersona(persona);
+    
+    const insights = getPersonaInsights(persona);
+    setPersonaInsights(insights);
+    
+    // Save session
+    saveSession(
+      finalWPMValue,
+      finalAccuracyValue,
+      persona.name,
+      backspaces,
+      totalTypedCharacters,
+      correctCharacters,
+      totalTypedCharacters - correctCharacters,
+      testSettings.duration,
+      testSettings.textType,
+      analytics_wpmTimeline,
+      metrics.typingConsistencyScore,
+      metrics.fatigueScore,
+      metrics.reactionDelay,
+      metrics.topErrorHotspots,
+      metrics.topBackspaceHotspots,
+      missedCharacters,
+      insights
+    );
+    
+    setShowResults(true);
+    setIsTestActive(false);
+  }, [testStartTime, testSettings, correctCharacters, totalTypedCharacters, backspaces, analytics_wpmTimeline, keystrokeLog]);
+
+  // Handle keystroke
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (!isTestActive || isCountingDown) return;
+    
+    if (testSettings.mode === 'zen') return;
+    
+    if (currentPosition >= expectedText.length) return;
+    
+    if (firstKeystrokeTime === null && testStartTime) {
+      setFirstKeystrokeTime(Date.now());
+    }
+    
+    const expected = expectedText[currentPosition];
+    const isCorrect = e.key === expected;
+    const timestamp = testStartTime ? (Date.now() - testStartTime) / 1000 : 0;
+    
+    if (isCorrect) {
+      setCorrectCharacters(prev => prev + 1);
+      setAnalytics_correctCharsSoFar(prev => prev + 1);
+    } else {
+      setMissedCharacters(prev => ({
+        ...prev,
+        [expected]: (prev[expected] || 0) + 1
+      }));
+    }
+    
+    setTotalTypedCharacters(prev => prev + 1);
+    setCurrentPosition(prev => prev + 1);
+    
+    const newTyped = [...typedCharacters];
+    newTyped[currentPosition] = e.key;
+    setTypedCharacters(newTyped);
+    
+    const newStatus = [...characterStatus];
+    newStatus[currentPosition] = isCorrect ? 'correct' : 'incorrect';
+    setCharacterStatus(newStatus);
+    
+    // Log keystroke
+    const keystrokeData: KeystrokeData = {
+      key: e.key,
+      keyId: e.code,
+      correct: isCorrect,
+      timestamp,
+      position: currentPosition
+    };
+    setKeystrokeLog(prev => [...prev, keystrokeData]);
+    
+    // Update WPM timeline
+    const elapsedSeconds = Math.floor(timestamp);
+    if (elapsedSeconds > 0) {
+      const wpm = (analytics_correctCharsSoFar / 5) / (elapsedSeconds / 60);
+      setAnalytics_wpmTimeline(prev => {
+        const newTimeline = [...prev];
+        const existingIndex = newTimeline.findIndex(point => point.second === elapsedSeconds);
+        if (existingIndex >= 0) {
+          newTimeline[existingIndex] = { second: elapsedSeconds, wpm };
+        } else {
+          newTimeline.push({ second: elapsedSeconds, wpm });
+        }
+        return newTimeline;
+      });
+    }
+  }, [isTestActive, isCountingDown, testSettings.mode, currentPosition, expectedText, firstKeystrokeTime, testStartTime, typedCharacters, characterStatus, analytics_correctCharsSoFar]);
+
+  // Handle backspace
+  const handleBackspace = useCallback(() => {
+    if (!isTestActive || isCountingDown) return;
+    if (testSettings.mode === 'zen') return;
+    if (currentPosition <= 0) return;
+    
+    setBackspaces(prev => prev + 1);
+    setCurrentPosition(prev => prev - 1);
+    
+    const newTyped = [...typedCharacters];
+    newTyped[currentPosition - 1] = '';
+    setTypedCharacters(newTyped);
+    
+    const newStatus = [...characterStatus];
+    newStatus[currentPosition - 1] = '';
+    setCharacterStatus(newStatus);
+  }, [isTestActive, isCountingDown, testSettings.mode, currentPosition, typedCharacters, characterStatus]);
+
+  // Handle Zen content changes
+  const handleZenContentChange = useCallback((content: string) => {
+    setZenContent(content);
+    
+    if (firstKeystrokeTime === null && testStartTime) {
+      setFirstKeystrokeTime(Date.now());
+    }
+    
+    // Calculate live WPM for Zen mode
+    if (testStartTime) {
+      const elapsedMinutes = (Date.now() - testStartTime) / 60000;
+      const wordCount = content.trim().split(' ').length;
+      const wpm = elapsedMinutes > 0 ? wordCount / elapsedMinutes : 0;
+      setLiveWPM(wpm);
+    }
+  }, [firstKeystrokeTime, testStartTime]);
+
+  // Handle Zen manual end
+  const handleZenManualEnd = useCallback(() => {
+    endTest();
+  }, [endTest]);
 
   return (
-    <div className="min-h-screen bg-background p-4">
+    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-blue-900 to-green-900 p-4">
       <div className="max-w-4xl mx-auto space-y-6">
-        <div className="text-center space-y-2">
-          <h1 className="text-3xl font-bold text-foreground">Type Flow Forge</h1>
-          <p className="text-muted-foreground">Test your typing speed and accuracy</p>
+        {/* Header */}
+        <div className="text-center space-y-4 fade-in">
+          <h1 
+            className="text-3xl font-bold text-cyan-100 cursor-pointer hover:text-cyan-200 transition-all duration-200 btn-hover"
+            onClick={() => {
+              setCurrentView('main');
+              setIsTestActive(false);
+              setShowResults(false);
+            }}
+            title="Click to return to home"
+          >
+            Typora
+          </h1>
+          <p className="text-green-200 fade-in stagger-1">Test your typing speed and accuracy</p>
+        
+          {/* Navigation */}
+          <div className="flex justify-center space-x-4">
+            <Button
+              onClick={() => setCurrentView('main')}
+              variant={currentView === 'main' ? 'default' : 'outline'}
+              className={`btn-hover btn-active transition-all duration-200 ${
+                currentView === 'main'
+                  ? 'bg-cyan-600 hover:bg-cyan-700 text-white border border-cyan-500'
+                  : 'text-cyan-200 border-cyan-600 hover:bg-cyan-900 hover:text-cyan-100'
+              }`}
+            >
+              🎯 Typing Test
+            </Button>
+            <Button
+              onClick={() => setCurrentView('analytics')}
+              variant={currentView === 'analytics' ? 'default' : 'outline'}
+              className={`btn-hover btn-active transition-all duration-200 ${
+                currentView === 'analytics'
+                  ? 'bg-cyan-600 hover:bg-cyan-700 text-white border border-cyan-500'
+                  : 'text-cyan-200 border-cyan-600 hover:bg-cyan-900 hover:text-cyan-100'
+              }`}
+            >
+              📊 Analytics
+            </Button>
+          </div>
         </div>
 
-        <Card className="mx-auto max-w-md">
-          <CardContent className="p-6 space-y-6">
-            <div className="text-center">
-              <p>Simple typing test interface</p>
-              <textarea 
-                value={text}
-                onChange={(e) => setText(e.target.value)}
-                className="w-full h-32 p-2 border rounded mt-4"
-                placeholder="Start typing here..."
+        {/* Main Content */}
+        {currentView === 'analytics' ? (
+          <AnalyticsDashboard />
+        ) : (
+          <>
+            {!isTestActive && !showResults && (
+              <div className="space-y-6">
+                <div className="text-center">
+                  <TestConfig settings={testSettings} onSettingsChange={setTestSettings} />
+                </div>
+                <div className="text-center">
+                  <Button 
+                    onClick={startTest}
+                    className="bg-cyan-600 hover:bg-cyan-700 text-white border border-cyan-500 shadow-lg shadow-cyan-500/25 px-8 py-3 text-lg btn-hover btn-active"
+                  >
+                    Start Test
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {isTestActive && (
+              <div className="space-y-6">
+                {/* Timer Display */}
+                {(testSettings.mode === 'time' || (testSettings.mode === 'custom' && testSettings.customUseTime)) && (
+                  <Card className="bg-gray-900 border border-cyan-600 shadow-lg shadow-cyan-500/25 sticky top-0 z-10">
+                    <CardContent className="p-4">
+                      <div className="text-center">
+                        <h2 className="text-lg font-semibold text-cyan-100 mb-2">Time Remaining</h2>
+                        <div className="text-3xl font-mono text-cyan-400">
+                          {Math.floor(timeRemaining / 60)}:{(timeRemaining % 60).toString().padStart(2, '0')}
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
+
+                {/* Typing Area */}
+                <TypingArea
+                  expectedText={expectedText}
+                  currentPosition={currentPosition}
+                  characterStatus={characterStatus}
+                  typedCharacters={typedCharacters}
+                  onKeyDown={handleKeyDown}
+                  isActive={isTestActive}
+                  quoteAuthor={testSettings.mode === 'quote' ? quoteAuthor : undefined}
+                  liveWPM={testSettings.mode === 'zen' ? liveWPM : undefined}
+                  isZenMode={testSettings.mode === 'zen'}
+                  zenContent={zenContent}
+                  onZenContentChange={handleZenContentChange}
+                  onEndTest={testSettings.mode === 'zen' ? handleZenManualEnd : undefined}
+                />
+              </div>
+            )}
+            
+            {/* Results */}
+            {showResults && (
+              <div className="space-y-8">
+                <div className="text-center">
+                  <h2 className="text-3xl font-bold mb-6 text-cyan-100">Test Results</h2>
+                  
+                  {/* Main Stats */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                    <Card className="bg-gray-900 border border-cyan-600 shadow-lg shadow-cyan-500/25">
+                      <CardContent className="text-center p-6">
+                        <div className="text-4xl font-bold text-cyan-400 mb-2">
+                          {finalWPM}
+                        </div>
+                        <div className="text-cyan-200 uppercase tracking-wide text-sm font-medium">Words Per Minute</div>
+                      </CardContent>
+                    </Card>
+                    
+                    <Card className="bg-gray-900 border border-cyan-600 shadow-lg shadow-cyan-500/25">
+                      <CardContent className="text-center p-6">
+                        <div className="text-4xl font-bold text-cyan-400 mb-2">
+                          {finalAccuracy.toFixed(1)}%
+                        </div>
+                        <div className="text-cyan-200 uppercase tracking-wide text-sm font-medium">Accuracy</div>
+                      </CardContent>
+                    </Card>
+                    
+                    <Card className="bg-gray-900 border border-cyan-600 shadow-lg shadow-cyan-500/25">
+                      <CardContent className="text-center p-6">
+                        <div className="text-4xl font-bold text-cyan-400 mb-2">
+                          {backspaces}
+                        </div>
+                        <div className="text-cyan-200 uppercase tracking-wide text-sm font-medium">Backspaces</div>
+                      </CardContent>
+                    </Card>
+                  </div>
+
+                  {/* Typing Persona */}
+                  {typingPersona && (
+                    <Card className="bg-gray-900 border border-cyan-600 shadow-lg shadow-cyan-500/25 mb-6">
+                      <CardContent className="p-6 text-center">
+                        <div className="text-6xl mb-2 bounce-in">{typingPersona.icon}</div>
+                        <h3 className="text-2xl font-bold text-cyan-100 mb-2 fade-in">{typingPersona.title}</h3>
+                        <p className="text-cyan-200 mb-4">{typingPersona.description}</p>
+                        
+                        {/* Persona Insights */}
+                        {personaInsights.length > 0 && (
+                          <div className="mt-4">
+                            <h4 className="text-lg font-semibold text-cyan-100 mb-3 text-center">💡 Insights for You</h4>
+                            <ul className="space-y-2">
+                              {personaInsights.map((insight, index) => (
+                                <li key={index} className="text-cyan-100 text-left">
+                                  <span className="text-cyan-400 mr-2">•</span>
+                                  <span className="text-cyan-100">{insight}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                      </CardContent>
+                    </Card>
+                  )}
+
+                  {/* Behavioral Insights */}
+                  <BehavioralInsights 
+                    wpm={finalWPM}
+                    accuracy={finalAccuracy}
+                    behavioralMetrics={behavioralMetrics}
+                    missedCharacters={missedCharacters}
+                    analytics_wpmTimeline={analytics_wpmTimeline}
+                    testDuration={testSettings.duration}
+                  />
+
+                  {/* Error Analysis */}
+                  <ErrorAnalysis 
+                    missedCharacters={missedCharacters}
+                    analytics_wpmTimeline={analytics_wpmTimeline}
+                    testDuration={testSettings.duration}
+                  />
+
+                  {/* WPM Prediction */}
+                  <WPMPrediction />
+
+                  {/* Export Buttons */}
+                  <div className="bg-gray-800 p-6 rounded-lg border border-cyan-600 shadow-sm mb-6">
+                    <h3 className="text-xl font-semibold text-cyan-100 mb-4 text-center">Export Session Data</h3>
+                    <div className="flex flex-col sm:flex-row gap-3 justify-center">
+                      <Button 
+                        onClick={() => exportToCSV({
+                          finalWPM: finalWPM || 0,
+                          accuracy: finalAccuracy || 0,
+                          totalBackspaces: backspaces || 0,
+                          testDuration: testSettings.duration,
+                          textType: testSettings.textType,
+                          totalCharacters: totalTypedCharacters || 0,
+                          correctCharacters: correctCharacters || 0,
+                          incorrectCharacters: (totalTypedCharacters || 0) - (correctCharacters || 0),
+                          wpmOverTime: analytics_wpmTimeline?.map(item => item.wpm) || [],
+                          charactersPerSecond: [],
+                          commonlyMistypedCharacters: missedCharacters || {},
+                          testStartTime: testStartTime || Date.now(),
+                          testEndTime: Date.now(),
+                          typingConsistencyScore: behavioralMetrics?.typingConsistencyScore || 50,
+                          fatigueScore: 0,
+                          reactionDelay: behavioralMetrics?.reactionDelay || 0,
+                          topErrorHotspots: behavioralMetrics?.topErrorHotspots || [],
+                          topBackspaceHotspots: behavioralMetrics?.topBackspaceHotspots || [],
+                          typingPersona: typingPersona || { name: '', title: '', description: '', icon: '', color: '', traits: [] },
+                          personaInsights: personaInsights || [],
+                          keystrokeLog: keystrokeLog || []
+                        })}
+                        variant="outline"
+                        className="border-cyan-500 text-cyan-200 hover:bg-cyan-900 hover:text-cyan-100"
+                      >
+                        📊 Export as CSV
+                      </Button>
+                      <Button 
+                        onClick={() => exportToJSON({
+                          finalWPM: finalWPM || 0,
+                          accuracy: finalAccuracy || 0,
+                          totalBackspaces: backspaces || 0,
+                          testDuration: testSettings.duration,
+                          textType: testSettings.textType,
+                          totalCharacters: totalTypedCharacters || 0,
+                          correctCharacters: correctCharacters || 0,
+                          incorrectCharacters: (totalTypedCharacters || 0) - (correctCharacters || 0),
+                          wpmOverTime: analytics_wpmTimeline?.map(item => item.wpm) || [],
+                          charactersPerSecond: [],
+                          commonlyMistypedCharacters: missedCharacters || {},
+                          testStartTime: testStartTime || Date.now(),
+                          testEndTime: Date.now(),
+                          typingConsistencyScore: behavioralMetrics?.typingConsistencyScore || 50,
+                          fatigueScore: 0,
+                          reactionDelay: behavioralMetrics?.reactionDelay || 0,
+                          topErrorHotspots: behavioralMetrics?.topErrorHotspots || [],
+                          topBackspaceHotspots: behavioralMetrics?.topBackspaceHotspots || [],
+                          typingPersona: typingPersona || { name: '', title: '', description: '', icon: '', color: '', traits: [] },
+                          personaInsights: personaInsights || [],
+                          keystrokeLog: keystrokeLog || []
+                        })}
+                        variant="outline"
+                        className="border-cyan-500 text-cyan-200 hover:bg-cyan-900 hover:text-cyan-100"
+                      >
+                        📄 Export as JSON
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="text-center">
+                    <Button onClick={() => window.location.reload()} className="bg-cyan-600 text-white px-6 py-2 rounded-md hover:bg-cyan-700 transition-colors border border-cyan-500 shadow-lg shadow-cyan-500/25">
+                      Take Another Test
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Session History */}
+            <div className="mt-8">
+              <SessionHistory 
+                onSessionSelect={() => {}}
+                selectedSessionId={null}
               />
             </div>
-          </CardContent>
-        </Card>
+          </>
+        )}
       </div>
     </div>
   );
