@@ -142,13 +142,18 @@
     transition: all 0.1s ease-out;
   }
 
-  /* Typing field styles - Monkeytype-like */
+  /* Typing surface styles */
+  .typing-wrap {
+    position: relative;
+  }
+
   .typing-field {
     position: relative;
-    font-size: clamp(1rem, 2.4vw, 2rem);
-    line-height: 1.5;
-    letter-spacing: 0.02em;
     user-select: none;
+    font-variant-ligatures: none;
+    letter-spacing: 0.02em;
+    line-height: 1.6;
+    font-size: clamp(16px, 2.4vw, 28px);
     font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
     color: var(--fg, #e5e7eb);
     padding: 1rem;
@@ -159,16 +164,17 @@
   }
 
   .word {
-    margin-right: 0.5ch;
     white-space: pre;
+    margin-right: 0.5ch;
   }
 
-  .char {
-    position: relative;
+  .char, .space {
+    pointer-events: none;
   }
 
+  /* Character states */
   .char.pending {
-    opacity: 0.6;
+    opacity: 0.55;
     color: var(--fg-dim, #9ca3af);
   }
 
@@ -178,34 +184,56 @@
   }
 
   .char.incorrect {
-    opacity: 1;
-    color: var(--error, #ef4444);
+    color: var(--fg, #e5e7eb);
     text-decoration: underline;
     text-decoration-color: var(--error, #ef4444);
-    text-decoration-thickness: 2px;
   }
 
   .char.extra {
+    background: color-mix(in srgb, var(--error, #ef4444) 18%, transparent);
+  }
+
+  .space.pending {
+    opacity: 0.55;
+    color: var(--fg-dim, #9ca3af);
+  }
+
+  .space.correct {
     opacity: 1;
-    background: rgba(239, 68, 68, 0.15);
-    color: var(--error, #ef4444);
+    color: var(--fg, #e5e7eb);
+  }
+
+  .space.incorrect {
+    color: var(--fg, #e5e7eb);
+    text-decoration: underline;
+    text-decoration-color: var(--error, #ef4444);
   }
 
   #caret {
     position: absolute;
     width: 2px;
-    height: 1.2em;
-    background: var(--fg, #e5e7eb);
-    opacity: 0.8;
-    animation: blink 1s step-end infinite;
+    height: 1em;
+    background: color-mix(in srgb, var(--fg, #e5e7eb) 85%, transparent);
+    will-change: transform;
+    animation: caretBlink 1s steps(1, end) infinite;
     pointer-events: none;
     z-index: 10;
   }
 
-  @keyframes blink {
+  @keyframes caretBlink {
     50% {
       opacity: 0;
     }
+  }
+
+  .input-trap {
+    position: absolute;
+    opacity: 0;
+    width: 1px;
+    height: 1px;
+    left: 0;
+    top: 0;
+    pointer-events: none;
   }
 
   .btn-active:active {
