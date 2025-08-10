@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { TypingSurface } from './TypingSurface';
+import { TypingViewport } from './TypingViewport';
 import { TestConfig } from './TestConfig';
 import { AnalyticsDashboard } from './AnalyticsDashboard';
 import { SessionHistory } from './SessionHistory';
@@ -554,12 +554,11 @@ export const TypingTest = () => {
                         disabled={!isTestActive}
                       />
                     ) : (
-                      <TypingSurface
+                      <TypingViewport
                         words={wordList}
-                        activeWordIdx={activeWordIdx}
-                        activeCharIdx={activeCharIdx}
-                        charStates={charStates}
-                        isComposing={isComposing}
+                        activeWord={activeWordIdx}
+                        activeChar={activeCharIdx}
+                        charState={charStates}
                         onCharacterInput={handleCharacterInput}
                         onSpace={handleSpace}
                         onBackspace={handleBackspace}

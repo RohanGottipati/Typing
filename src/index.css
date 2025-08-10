@@ -142,25 +142,28 @@
     transition: all 0.1s ease-out;
   }
 
-  /* Typing surface styles */
-  .typing-wrap {
+  /* Typing viewport styles */
+  .viewport {
     position: relative;
+    height: 9.5rem;
+    overflow: hidden;
+    border-radius: 0.75rem;
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid rgba(59, 130, 246, 0.3);
   }
 
-  .typing-field {
+  .flow {
     position: relative;
-    user-select: none;
-    font-variant-ligatures: none;
-    letter-spacing: 0.02em;
+    will-change: transform;
+    transition: transform 160ms ease;
+    font-size: clamp(16px, 2.3vw, 28px);
     line-height: 1.6;
-    font-size: clamp(16px, 2.4vw, 28px);
+    letter-spacing: 0.02em;
+    font-variant-ligatures: none;
+    user-select: none;
     font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
     color: var(--fg, #e5e7eb);
     padding: 1rem;
-    min-height: 200px;
-    background: rgba(0, 0, 0, 0.3);
-    border-radius: 0.5rem;
-    border: 1px solid rgba(59, 130, 246, 0.3);
   }
 
   .word {
