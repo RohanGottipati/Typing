@@ -41,104 +41,137 @@
   color: #888;
 }
 
-/* Typing surface optimizations */
+/* Typing surface - Fixed container with proper overflow handling */
 .test-root {
   position: relative;
   width: 100%;
-  height: 100%;
+  max-width: 800px;
+  margin: 0 auto;
 }
 
 .viewport {
   position: relative;
   width: 100%;
-  height: 9.5rem;
+  height: 200px; /* Fixed height in pixels */
   overflow: hidden;
-  background: transparent;
+  background: rgba(17, 24, 39, 0.5);
   border: 1px solid #374151;
   border-radius: 0.5rem;
-  background-color: rgba(17, 24, 39, 0.5);
+  box-sizing: border-box;
 }
 
 .flow {
-  position: relative;
-  width: 100%;
-  height: 100%;
-  padding: 1rem;
-  will-change: transform;
-  transition: transform 160ms ease;
-  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
-  font-size: 1.125rem;
-  line-height: 1.75;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 1.5rem;
+  font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', 'Consolas', monospace;
+  font-size: 1.5rem;
+  line-height: 1.8;
   color: #e5e7eb;
   word-wrap: break-word;
-  white-space: pre-wrap;
+  word-break: break-word;
   overflow-wrap: break-word;
+  white-space: pre-wrap;
   box-sizing: border-box;
+  will-change: transform;
+  transition: transform 140ms ease;
+  /* Force text to stay within bounds */
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .word {
   display: inline;
   white-space: pre-wrap;
-  word-break: break-word;
   word-wrap: break-word;
+  word-break: break-word;
   overflow-wrap: break-word;
+  /* Prevent words from overflowing */
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .char {
   position: relative;
   display: inline;
-  transition: color 0.1s ease;
+  transition: all 0.15s ease;
   white-space: pre-wrap;
+  font-size: 1.5rem;
+  /* Ensure characters don't overflow */
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .char.pending {
-  color: #6b7280;
+  color: #6b7280 !important;
 }
 
 .char.correct {
-  color: #10b981;
+  color: #10b981 !important;
+  font-weight: 500;
 }
 
 .char.incorrect {
-  color: #ef4444;
+  color: #ef4444 !important;
   text-decoration: underline;
   text-decoration-color: #ef4444;
   text-decoration-thickness: 2px;
+  font-weight: 500;
 }
 
 .char.extra {
-  color: #f59e0b;
+  color: #f59e0b !important;
+  background-color: rgba(239, 68, 68, 0.2);
   text-decoration: underline;
   text-decoration-color: #f59e0b;
   text-decoration-thickness: 2px;
+  font-weight: 500;
 }
 
 .space {
   display: inline;
-  transition: color 0.1s ease;
+  transition: color 0.15s ease;
   white-space: pre-wrap;
+  font-size: 1.5rem;
+  /* Ensure spaces don't cause overflow */
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .space.pending {
-  color: transparent;
+  color: transparent !important;
 }
 
 .space.correct {
-  color: #10b981;
+  color: #10b981 !important;
 }
 
 .space.incorrect {
-  color: #ef4444;
+  color: #ef4444 !important;
+}
+
+/* Caret blinking animation */
+@keyframes caret-blink {
+  0%, 50% {
+    opacity: 1;
+  }
+  51%, 100% {
+    opacity: 0;
+  }
 }
 
 #caret {
   position: absolute;
-  width: 2px;
+  width: 3px;
   background-color: #10b981;
   transition: none;
   pointer-events: none;
   z-index: 10;
   will-change: transform;
+  animation: caret-blink 1s infinite;
 }
 
 .input-trap {

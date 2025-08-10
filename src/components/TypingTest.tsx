@@ -754,9 +754,6 @@ export const TypingTest = () => {
                       <TypingViewport
                         ref={typingViewportRef}
                         words={wordList}
-                        activeWord={activeWordIdx}
-                        activeChar={activeCharIdx}
-                        charState={charStates}
                         onCharacterInput={handleCharacterInput}
                         onSpace={handleSpace}
                         onBackspace={handleBackspace}
