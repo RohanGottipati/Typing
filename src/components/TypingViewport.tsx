@@ -419,7 +419,7 @@ export const TypingViewport = forwardRef<TypingViewportRef, TypingViewportProps>
           style={{
             position: 'absolute',
             width: '3px',
-            backgroundColor: '#10b981',
+            backgroundColor: '#22c55e',
             transition: 'none',
             pointerEvents: 'none',
             zIndex: 10,
