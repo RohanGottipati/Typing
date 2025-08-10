@@ -56,7 +56,12 @@ export const TypingViewport = forwardRef<TypingViewportRef, TypingViewportProps>
       }
     },
     startTest: () => {
-      if (!flowRef.current || words.length === 0) return;
+      console.log('startTest called with words:', words); // Debug log
+      
+      if (!flowRef.current || words.length === 0) {
+        console.log('startTest early return - no flowRef or empty words'); // Debug log
+        return;
+      }
       
       // Reset all refs
       activeWordIndex.current = 0;
@@ -124,6 +129,8 @@ export const TypingViewport = forwardRef<TypingViewportRef, TypingViewportProps>
   // One-time text rendering - React never touches this again
   const renderTextOnce = useCallback(() => {
     if (!flowRef.current) return;
+    
+    console.log('Rendering text with words:', words); // Debug log
     
     const flow = flowRef.current;
     
@@ -256,7 +263,9 @@ export const TypingViewport = forwardRef<TypingViewportRef, TypingViewportProps>
         const charElement = charRefs.current[wordIdx]?.[charIdx];
         
         if (charElement) {
-          charElement.className = `char ${isCorrect ? 'correct' : 'incorrect'}`;
+          const newClass = `char ${isCorrect ? 'correct' : 'incorrect'}`;
+          charElement.className = newClass;
+          console.log(`Applied class "${newClass}" to character "${typedChar}"`); // Debug log
         }
         
         charStates.current[wordIdx][charIdx] = isCorrect ? 'correct' : 'incorrect';
@@ -419,7 +428,7 @@ export const TypingViewport = forwardRef<TypingViewportRef, TypingViewportProps>
           style={{
             position: 'absolute',
             width: '3px',
-            backgroundColor: '#22c55e',
+            backgroundColor: '#00ff00',
             transition: 'none',
             pointerEvents: 'none',
             zIndex: 10,
