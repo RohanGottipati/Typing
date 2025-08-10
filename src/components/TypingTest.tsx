@@ -260,11 +260,11 @@ export const TypingTest = () => {
                   });
                 }, 1000);
                 
-                // Activate test and focus input
+                // Activate test and start typing viewport imperatively
                 setIsTestActive(true);
                 setTimeout(() => {
                   if (typingViewportRef.current) {
-                    typingViewportRef.current.focus();
+                    typingViewportRef.current.startTest();
                   }
                 }, 50);
                 
@@ -279,10 +279,10 @@ export const TypingTest = () => {
           setTestStartTime(Date.now());
           setIsTestActive(true);
           
-          // Focus input after a short delay to ensure DOM is ready
+          // Start typing viewport imperatively after a short delay
           setTimeout(() => {
             if (typingViewportRef.current) {
-              typingViewportRef.current.focus();
+              typingViewportRef.current.startTest();
             }
           }, 50);
         }
@@ -308,20 +308,9 @@ export const TypingTest = () => {
       clearInterval(timerRef.current);
     }
     
-    // Mark remaining pending characters as incorrect for current word
-    if (activeWordIdx < wordList.length) {
-      setCharStates(prev => {
-        const newStates = [...prev];
-        if (newStates[activeWordIdx]) {
-          newStates[activeWordIdx] = [...newStates[activeWordIdx]];
-          for (let i = activeCharIdx; i < wordList[activeWordIdx].length; i++) {
-            if (newStates[activeWordIdx][i] === 'pending') {
-              newStates[activeWordIdx][i] = 'incorrect';
-            }
-          }
-        }
-        return newStates;
-      });
+    // End the typing viewport imperatively
+    if (typingViewportRef.current) {
+      typingViewportRef.current.endTest();
     }
     
     const testDurationMs = testStartTime ? Date.now() - testStartTime : 0;
