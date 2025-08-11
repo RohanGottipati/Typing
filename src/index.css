@@ -429,3 +429,115 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* New Typing Box Styles */
+.typing-box-container {
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 28px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(10, 14, 20, 0.9);
+  position: relative;
+  overflow: hidden;
+}
+
+.typing-box-text-container {
+  font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', 'Consolas', monospace;
+  font-size: 20px;
+  line-height: 1.7;
+  word-spacing: 0.25em;
+  letter-spacing: 0.01em;
+  color: rgba(255, 255, 255, 0.65);
+  white-space: normal;
+  word-break: normal;
+  overflow-wrap: anywhere;
+  overflow-y: auto;
+  max-height: 400px;
+  padding: 0;
+  margin: 0;
+}
+
+.typing-box-zen-textarea {
+  font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', 'Consolas', monospace;
+  font-size: 20px;
+  line-height: 1.7;
+  word-spacing: 0.25em;
+  letter-spacing: 0.01em;
+  color: rgba(255, 255, 255, 0.65);
+  background: transparent;
+  border: none;
+  outline: none;
+  resize: none;
+  width: 100%;
+  min-height: 400px;
+  padding: 0;
+  margin: 0;
+  white-space: normal;
+  word-break: normal;
+  overflow-wrap: anywhere;
+}
+
+.typing-box-input-trap {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  top: -9999px;
+  left: -9999px;
+}
+
+/* Character state classes */
+.typingBox_char-pending {
+  color: rgba(255, 255, 255, 0.65);
+  transition: color 0.1s ease;
+}
+
+.typingBox_char-current {
+  color: #fff;
+  border-bottom: 2px solid rgba(255, 255, 255, 0.6);
+  transition: all 0.1s ease;
+}
+
+.typingBox_char-correct {
+  color: #22C55E;
+  transition: color 0.1s ease;
+}
+
+.typingBox_char-incorrect {
+  color: #EF4444;
+  transition: color 0.1s ease;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+  .typing-box-container {
+    max-width: 95%;
+    padding: 20px;
+    border-radius: 12px;
+  }
+  
+  .typing-box-text-container,
+  .typing-box-zen-textarea {
+    font-size: 18px;
+    line-height: 1.6;
+  }
+}
+
+@media (max-width: 480px) {
+  .typing-box-container {
+    padding: 16px;
+    border-radius: 10px;
+  }
+  
+  .typing-box-text-container,
+  .typing-box-zen-textarea {
+    font-size: 16px;
+    line-height: 1.5;
+  }
+}

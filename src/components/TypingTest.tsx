@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { TypingViewport, TypingViewportRef } from './TypingViewport';
+import { TypingBox, TypingBoxRef } from './TypingBox';
 import { TestConfig } from './TestConfig';
 import { AnalyticsDashboard } from './AnalyticsDashboard';
 import { SessionHistory } from './SessionHistory';
@@ -124,7 +124,7 @@ export const TypingTest = () => {
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const testEndedRef = useRef(false);
   const isStartingRef = useRef(false);
-  const typingViewportRef = useRef<TypingViewportRef>(null);
+  const typingBoxRef = useRef<TypingBoxRef>(null);
 
   // Generate text for current mode
   const generateTextForMode = useCallback(() => {
@@ -263,8 +263,8 @@ export const TypingTest = () => {
                 // Activate test and start typing viewport imperatively
                 setIsTestActive(true);
                 setTimeout(() => {
-                  if (typingViewportRef.current) {
-                    typingViewportRef.current.startTest();
+                  if (typingBoxRef.current) {
+                    typingBoxRef.current.startTest();
                   }
                 }, 50);
                 
@@ -279,10 +279,10 @@ export const TypingTest = () => {
           setTestStartTime(Date.now());
           setIsTestActive(true);
           
-          // Start typing viewport imperatively after a short delay
+          // Start typing box imperatively after a short delay
           setTimeout(() => {
-            if (typingViewportRef.current) {
-              typingViewportRef.current.startTest();
+            if (typingBoxRef.current) {
+              typingBoxRef.current.startTest();
             }
           }, 50);
         }
@@ -308,9 +308,9 @@ export const TypingTest = () => {
       clearInterval(timerRef.current);
     }
     
-    // End the typing viewport imperatively
-    if (typingViewportRef.current) {
-      typingViewportRef.current.endTest();
+    // End the typing box imperatively
+    if (typingBoxRef.current) {
+      typingBoxRef.current.endTest();
     }
     
     const testDurationMs = testStartTime ? Date.now() - testStartTime : 0;
@@ -382,28 +382,49 @@ export const TypingTest = () => {
     
     switch (testSettings.mode) {
       case 'words':
-      case 'custom':
         // Words mode: End when last character of target word count is typed
-        if (testSettings.mode === 'words' && activeWordIdx >= (testSettings.wordCount || 25) - 1) {
-          const targetWord = wordList[testSettings.wordCount! - 1];
-          if (activeCharIdx >= targetWord.length) {
-            shouldEnd = true;
+        if (testSettings.wordCount) {
+          const words = expectedText.split(' ');
+          if (words.length >= testSettings.wordCount) {
+            // Calculate the character position of the end of the target word
+            let charCount = 0;
+            for (let i = 0; i < testSettings.wordCount; i++) {
+              charCount += words[i].length;
+              if (i < testSettings.wordCount - 1) {
+                charCount += 1; // Add space
+              }
+            }
+            if (currentPosition >= charCount - 1) {
+              shouldEnd = true;
+            }
           }
-        } else if (testSettings.mode === 'custom' && testSettings.customUseWords && activeWordIdx >= (testSettings.customWordLimit || 25) - 1) {
-          const targetWord = wordList[testSettings.customWordLimit! - 1];
-          if (activeCharIdx >= targetWord.length) {
-            shouldEnd = true;
+        }
+        break;
+        
+      case 'custom':
+        // Custom mode: End when last character of target word count is typed
+        if (testSettings.customUseWords && testSettings.customWordLimit) {
+          const words = expectedText.split(' ');
+          if (words.length >= testSettings.customWordLimit) {
+            // Calculate the character position of the end of the target word
+            let charCount = 0;
+            for (let i = 0; i < testSettings.customWordLimit; i++) {
+              charCount += words[i].length;
+              if (i < testSettings.customWordLimit - 1) {
+                charCount += 1; // Add space
+              }
+            }
+            if (currentPosition >= charCount - 1) {
+              shouldEnd = true;
+            }
           }
         }
         break;
         
       case 'quote':
         // Quote mode: End when last character of quote is typed
-        if (activeWordIdx >= wordList.length - 1) {
-          const lastWord = wordList[wordList.length - 1];
-          if (activeCharIdx >= lastWord.length) {
-            shouldEnd = true;
-          }
+        if (currentPosition >= expectedText.length - 1) {
+          shouldEnd = true;
         }
         break;
         
@@ -416,10 +437,10 @@ export const TypingTest = () => {
     if (shouldEnd) {
       finalizeTest();
     }
-  }, [isTestActive, testSettings, activeWordIdx, activeCharIdx, wordList, finalizeTest]);
+  }, [isTestActive, testSettings, currentPosition, expectedText, finalizeTest]);
 
   // Handle character input
-  const handleCharacterInput = useCallback((char: string) => {
+  const handleCharacterInput = useCallback((char: string, index: number) => {
     if (!isTestActive || isCountingDown || isComposing) return;
     
     if (firstKeystrokeTime === null && testStartTime) {
@@ -428,116 +449,78 @@ export const TypingTest = () => {
     
     const timestamp = testStartTime ? (Date.now() - testStartTime) / 1000 : 0;
     
-    if (activeWordIdx < wordList.length) {
-      const currentWord = wordList[activeWordIdx];
-      
-      if (activeCharIdx < currentWord.length) {
-        // Inside a word
-        const expected = currentWord[activeCharIdx];
-        const isCorrect = char === expected;
-        
-        if (isCorrect) {
-          setCorrectCharacters(prev => prev + 1);
-          setAnalytics_correctCharsSoFar(prev => prev + 1);
-        } else {
-          setMissedCharacters(prev => ({
-            ...prev,
-            [expected]: (prev[expected] || 0) + 1
-          }));
-        }
-        
-        setTotalTypedCharacters(prev => prev + 1);
-        
-        // Update character state
-        setCharStates(prev => {
-          const newStates = [...prev];
-          newStates[activeWordIdx] = [...newStates[activeWordIdx]];
-          newStates[activeWordIdx][activeCharIdx] = isCorrect ? 'correct' : 'incorrect';
-          return newStates;
-        });
-        
-        setActiveCharIdx(prev => prev + 1);
-      } else {
-        // Beyond word length - add extra
-        setTotalTypedCharacters(prev => prev + 1);
-        
-        setCharStates(prev => {
-          const newStates = [...prev];
-          newStates[activeWordIdx] = [...newStates[activeWordIdx]];
-          newStates[activeWordIdx].push('extra');
-          return newStates;
-        });
-      }
-      
-      // Log keystroke
-      const keystrokeData: KeystrokeData = {
-        key: char,
-        keyId: char,
-        correct: char === currentWord[activeCharIdx],
-        timestamp,
-        position: currentPosition
-      };
-      setKeystrokeLog(prev => [...prev, keystrokeData]);
-      
-      // Update WPM timeline
-      const elapsedSeconds = Math.floor(timestamp);
-      if (elapsedSeconds > 0) {
-        const wpm = (analytics_correctCharsSoFar / 5) / (elapsedSeconds / 60);
-        setAnalytics_wpmTimeline(prev => {
-          const newTimeline = [...prev];
-          const existingIndex = newTimeline.findIndex(point => point.second === elapsedSeconds);
-          if (existingIndex >= 0) {
-            newTimeline[existingIndex] = { second: elapsedSeconds, wpm };
-          } else {
-            newTimeline.push({ second: elapsedSeconds, wpm });
-          }
-          return newTimeline;
-        });
-      }
-      
-      // Check for test completion based on mode
-      checkTestCompletion();
+    // Update position tracking
+    setCurrentPosition(index);
+    
+    // Check if character is correct
+    const expectedChar = expectedText[index];
+    const isCorrect = char === expectedChar;
+    
+    if (isCorrect) {
+      setCorrectCharacters(prev => prev + 1);
+      setAnalytics_correctCharsSoFar(prev => prev + 1);
+    } else {
+      setMissedCharacters(prev => ({
+        ...prev,
+        [expectedChar]: (prev[expectedChar] || 0) + 1
+      }));
     }
-  }, [isTestActive, isCountingDown, isComposing, firstKeystrokeTime, testStartTime, activeWordIdx, activeCharIdx, wordList, currentPosition, analytics_correctCharsSoFar]);
+    
+    setTotalTypedCharacters(prev => prev + 1);
+    
+    // Update typed characters array
+    setTypedCharacters(prev => {
+      const newArray = [...prev];
+      newArray[index] = char;
+      return newArray;
+    });
+    
+    // Update character status
+    setCharacterStatus(prev => {
+      const newStatus = [...prev];
+      newStatus[index] = isCorrect ? 'correct' : 'incorrect';
+      return newStatus;
+    });
+    
+    // Log keystroke
+    const keystrokeData: KeystrokeData = {
+      key: char,
+      keyId: char,
+      correct: isCorrect,
+      timestamp,
+      position: index
+    };
+    setKeystrokeLog(prev => [...prev, keystrokeData]);
+    
+    // Update WPM timeline
+    const elapsedSeconds = Math.floor(timestamp);
+    if (elapsedSeconds > 0) {
+      const wpm = (analytics_correctCharsSoFar / 5) / (elapsedSeconds / 60);
+      setAnalytics_wpmTimeline(prev => {
+        const newTimeline = [...prev];
+        const existingIndex = newTimeline.findIndex(point => point.second === elapsedSeconds);
+        if (existingIndex >= 0) {
+          newTimeline[existingIndex] = { second: elapsedSeconds, wpm };
+        } else {
+          newTimeline.push({ second: elapsedSeconds, wpm });
+        }
+        return newTimeline;
+      });
+    }
+    
+    // Check for test completion based on mode
+    checkTestCompletion();
+  }, [isTestActive, isCountingDown, isComposing, firstKeystrokeTime, testStartTime, expectedText, analytics_correctCharsSoFar]);
 
   // Handle space
   const handleSpace = useCallback(() => {
     if (!isTestActive || isCountingDown || isComposing) return;
     
-    if (activeWordIdx < wordList.length) {
-      const currentWord = wordList[activeWordIdx];
-      
-      // Mark remaining pending chars as incorrect
-      setCharStates(prev => {
-        const newStates = [...prev];
-        newStates[activeWordIdx] = [...newStates[activeWordIdx]];
-        
-        // Mark remaining pending characters as incorrect
-        for (let i = activeCharIdx; i < currentWord.length; i++) {
-          if (newStates[activeWordIdx][i] === 'pending') {
-            newStates[activeWordIdx][i] = 'incorrect';
-          }
-        }
-        
-        // Mark space as correct if word was completed correctly
-        const wordCorrect = newStates[activeWordIdx].slice(0, currentWord.length).every(state => state === 'correct');
-        newStates[activeWordIdx][currentWord.length] = wordCorrect ? 'correct' : 'incorrect';
-        
-        return newStates;
-      });
-      
-      // Move to next word
-      if (activeWordIdx < wordList.length - 1) {
-        setActiveWordIdx(prev => prev + 1);
-        setActiveCharIdx(0);
-      }
-      
-      setTotalTypedCharacters(prev => prev + 1);
-      
-      // Check for test completion after space
-      setTimeout(() => checkTestCompletion(), 0);
-    }
-  }, [isTestActive, isCountingDown, isComposing, activeWordIdx, activeCharIdx, wordList, checkTestCompletion]);
+    // In the new character-based approach, spaces are handled automatically
+    // by the TypingBox component when the user types a space character
+    // This function is kept for compatibility but doesn't need to do anything
+    // as the space handling is now done in handleCharacterInput
+  }, [isTestActive, isCountingDown, isComposing]);
 
   // Handle backspace
   const handleBackspace = useCallback(() => {
@@ -545,33 +528,25 @@ export const TypingTest = () => {
     
     setBackspaces(prev => prev + 1);
     
-    if (activeWordIdx < wordList.length) {
-      const currentWord = wordList[activeWordIdx];
+    // Move back one position
+    if (currentPosition > 0) {
+      setCurrentPosition(prev => prev - 1);
       
-      // Check if there are extra characters to remove
-      const currentStates = charStates[activeWordIdx] || [];
-      const extraCount = currentStates.filter(state => state === 'extra').length;
+      // Reset character status to pending
+      setCharacterStatus(prev => {
+        const newStatus = [...prev];
+        newStatus[currentPosition - 1] = 'pending';
+        return newStatus;
+      });
       
-      if (extraCount > 0) {
-        // Remove last extra character
-        setCharStates(prev => {
-          const newStates = [...prev];
-          newStates[activeWordIdx] = [...newStates[activeWordIdx]];
-          newStates[activeWordIdx].pop(); // Remove last extra
-          return newStates;
-        });
-      } else if (activeCharIdx > 0) {
-        // Move back one character and reset to pending
-        setActiveCharIdx(prev => prev - 1);
-        setCharStates(prev => {
-          const newStates = [...prev];
-          newStates[activeWordIdx] = [...newStates[activeWordIdx]];
-          newStates[activeWordIdx][activeCharIdx - 1] = 'pending';
-          return newStates;
-        });
-      }
+      // Clear typed character
+      setTypedCharacters(prev => {
+        const newArray = [...prev];
+        newArray[currentPosition - 1] = '';
+        return newArray;
+      });
     }
-  }, [isTestActive, isCountingDown, isComposing, activeWordIdx, activeCharIdx, wordList, charStates]);
+  }, [isTestActive, isCountingDown, isComposing, currentPosition]);
 
   // Handle composition events
   const handleCompositionStart = useCallback(() => {
@@ -672,9 +647,9 @@ export const TypingTest = () => {
             {showResults && (
               <div className="text-center mb-6">
                 <Button 
-                  id="start-test"
+                  id="start-new-test"
                   type="button"
-                  aria-label="Start Test"
+                  aria-label="Start New Test"
                   disabled={isRunning}
                   onClick={startTest}
                   className="bg-cyan-600 hover:bg-cyan-700 text-white border border-cyan-500 shadow-lg shadow-cyan-500/25 px-8 py-3 text-lg btn-hover btn-active disabled:opacity-50 disabled:cursor-not-allowed"
@@ -731,26 +706,19 @@ export const TypingTest = () => {
                 {/* Typing Area */}
                 <Card className="bg-gray-900 border border-cyan-600 shadow-lg shadow-cyan-500/25">
                   <CardContent className="p-6">
-                    {testSettings.mode === 'zen' ? (
-                      <textarea
-                        value={zenContent}
-                        onChange={(e) => handleZenContentChange(e.target.value)}
-                        className="w-full min-h-[400px] p-4 text-lg leading-relaxed bg-transparent border-none outline-none resize-none font-mono text-white placeholder-gray-500"
-                        placeholder="Start typing here..."
-                        disabled={!isTestActive}
-                      />
-                    ) : (
-                      <TypingViewport
-                        ref={typingViewportRef}
-                        words={wordList}
-                        onCharacterInput={handleCharacterInput}
-                        onSpace={handleSpace}
-                        onBackspace={handleBackspace}
-                        onCompositionStart={handleCompositionStart}
-                        onCompositionEnd={handleCompositionEnd}
-                        isActive={isTestActive}
-                      />
-                    )}
+                    <TypingBox
+                      ref={typingBoxRef}
+                      text={expectedText}
+                      onCharacterInput={handleCharacterInput}
+                      onSpace={handleSpace}
+                      onBackspace={handleBackspace}
+                      onCompositionStart={handleCompositionStart}
+                      onCompositionEnd={handleCompositionEnd}
+                      isActive={isTestActive}
+                      mode={testSettings.mode}
+                      zenContent={zenContent}
+                      onZenContentChange={handleZenContentChange}
+                    />
                     
                     {/* End Test button for all modes */}
                     {isTestActive && (
@@ -932,11 +900,7 @@ export const TypingTest = () => {
                     </div>
                   </div>
 
-                  <div className="text-center">
-                    <Button onClick={() => window.location.reload()} className="bg-cyan-600 text-white px-6 py-2 rounded-md hover:bg-cyan-700 transition-colors border border-cyan-500 shadow-lg shadow-cyan-500/25">
-                      Take Another Test
-                    </Button>
-                  </div>
+
                 </div>
               </div>
             )}
