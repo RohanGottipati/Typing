@@ -39,6 +39,7 @@ export const TypingBox = forwardRef<TypingBoxRef, TypingBoxProps>(({
   // Performance-critical state in refs
   const typingBox_chars = useRef<string[]>([]);
   const typingBox_index = useRef(0);
+  const typingBox_typedChars = useRef<string[]>([]);
   const typingBox_charElements = useRef<HTMLSpanElement[]>([]);
   const typingBox_isRunning = useRef(false);
   const typingBox_isComposing = useRef(false);
@@ -64,6 +65,7 @@ export const TypingBox = forwardRef<TypingBoxRef, TypingBoxProps>(({
         // Initialize character array and elements
         typingBox_chars.current = text ? text.split('') : [];
         typingBox_index.current = 0;
+        typingBox_typedChars.current = [];
         typingBox_isRunning.current = true;
         
         // Render initial text
@@ -116,7 +118,7 @@ export const TypingBox = forwardRef<TypingBoxRef, TypingBoxProps>(({
     });
   }, [text, mode]);
 
-  // Update character states efficiently
+  // Update character states efficiently with correct/incorrect tracking
   const typingBox_updateCharStates = useCallback(() => {
     if (typingBox_updateFrame.current) {
       cancelAnimationFrame(typingBox_updateFrame.current);
@@ -127,10 +129,20 @@ export const TypingBox = forwardRef<TypingBoxRef, TypingBoxProps>(({
         if (!element) return;
         
         if (index < typingBox_index.current) {
-          element.className = 'typingBox_char-correct';
+          // Past characters - check if they were typed correctly
+          const typedChar = typingBox_typedChars.current[index];
+          const expectedChar = typingBox_chars.current[index];
+          
+          if (typedChar === expectedChar) {
+            element.className = 'typingBox_char-correct'; // Green #22C55E
+          } else {
+            element.className = 'typingBox_char-incorrect'; // Red #EF4444
+          }
         } else if (index === typingBox_index.current) {
+          // Current character - white with underline
           element.className = 'typingBox_char-current';
         } else {
+          // Future characters
           element.className = 'typingBox_char-pending';
         }
       });
@@ -139,7 +151,7 @@ export const TypingBox = forwardRef<TypingBoxRef, TypingBoxProps>(({
     });
   }, []);
 
-  // Handle character input - non-blocking mistakes
+  // Handle character input - non-blocking mistakes (Monkeytype style)
   const handleInput = useCallback((e: React.FormEvent<HTMLInputElement>) => {
     if (!typingBox_isRunning.current || typingBox_isComposing.current || mode === 'zen') return;
     
@@ -156,6 +168,9 @@ export const TypingBox = forwardRef<TypingBoxRef, TypingBoxProps>(({
       const expectedChar = typingBox_chars.current[currentIndex];
       const isCorrect = currentChar === expectedChar;
       
+      // Track the typed character
+      typingBox_typedChars.current[currentIndex] = currentChar;
+      
       // Always call onCharacterInput with the typed character and current index
       onCharacterInput(currentChar, currentIndex);
       
@@ -167,7 +182,7 @@ export const TypingBox = forwardRef<TypingBoxRef, TypingBoxProps>(({
         onSpace();
       }
       
-      // Update visual states
+      // Update visual states immediately
       typingBox_updateCharStates();
     }
   }, [onCharacterInput, onSpace, mode, typingBox_updateCharStates]);
@@ -181,6 +196,8 @@ export const TypingBox = forwardRef<TypingBoxRef, TypingBoxProps>(({
       
       if (typingBox_index.current > 0) {
         typingBox_index.current--;
+        // Clear the typed character at the current position
+        typingBox_typedChars.current[typingBox_index.current] = '';
         onBackspace();
         typingBox_updateCharStates();
       }
@@ -263,7 +280,6 @@ export const TypingBox = forwardRef<TypingBoxRef, TypingBoxProps>(({
             autoCapitalize="none"
             autoCorrect="off"
             spellCheck={false}
-            inputMode="none"
             aria-hidden="true"
             onChange={handleInput}
             onKeyDown={handleKeyDown}

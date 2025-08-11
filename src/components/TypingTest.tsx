@@ -220,6 +220,19 @@ export const TypingTest = () => {
     setZenContent('');
     setExpectedText('');
     
+    // Reset new engine state
+    setRes_hasEnded(false);
+    setRes_startedAtMs(null);
+    setRes_firstKeyAtMs(null);
+    setRes_endedAtMs(null);
+    setRes_totalCharsTyped(0);
+    setRes_correctChars(0);
+    setRes_incorrectChars(0);
+    setRes_backspaces(0);
+    setRes_charsCorrectBySecond([]);
+    setRes_keystrokes([]);
+    setRes_wpmTimeline([]);
+    
     // Reset results state
     testEndedRef.current = false;
     setShowResults(false);
@@ -287,14 +300,44 @@ export const TypingTest = () => {
                 setShowCountdown(false);
                 setIsCountingDown(false);
                 setTestStartTime(Date.now());
+                setRes_startedAtMs(Date.now());
                 
                 // Start the actual test timer
                 timerRef.current = setInterval(() => {
                   setTimeRemaining(prev => {
                     if (prev <= 1) {
                       // End test when timer reaches 0 - use unified end function
-                      if (testEndedRef.current) return 0;
-                      results_endSessionOnce();
+                      if (res_hasEnded) return 0;
+                      
+                      // Clear intervals and flush final metrics
+                      const endedAtMs = Date.now();
+                      const currentMetrics = res_currentMetrics.current;
+                      const startedAtMs = currentMetrics.startedAtMs || endedAtMs;
+                      
+                      // Debug: Log timer end metrics
+                      console.log('Timer end - current metrics:', {
+                        totalCharsTyped: currentMetrics.totalCharsTyped,
+                        correctChars: currentMetrics.correctChars,
+                        incorrectChars: currentMetrics.incorrectChars,
+                        backspaces: currentMetrics.backspaces,
+                        elapsedMs: endedAtMs - startedAtMs,
+                        keystrokesCount: currentMetrics.keystrokes.length
+                      });
+                      
+                      // Package the same metrics as manual end using current ref values
+                      endSessionOnce({
+                        totalCharsTyped: currentMetrics.totalCharsTyped,
+                        correctChars: currentMetrics.correctChars,
+                        incorrectChars: currentMetrics.incorrectChars,
+                        backspaces: currentMetrics.backspaces,
+                        firstKeyAtMs: currentMetrics.firstKeyAtMs,
+                        startedAtMs: startedAtMs,
+                        endedAtMs: endedAtMs,
+                        charsCorrectBySecond: currentMetrics.charsCorrectBySecond,
+                        wpmTimeline: currentMetrics.wpmTimeline,
+                        keystrokes: currentMetrics.keystrokes
+                      });
+                      
                       return 0;
                     }
                     return prev - 1;
@@ -320,6 +363,7 @@ export const TypingTest = () => {
         } else {
           // Non-time modes: Start immediately
           setTestStartTime(Date.now());
+          setRes_startedAtMs(Date.now());
           setIsTestActive(true);
           
           // Start typing box imperatively after a short delay
@@ -344,10 +388,58 @@ export const TypingTest = () => {
     }, 0); // Use 0ms timeout to defer to next tick
   }, [testSettings, generateTextForMode]);
 
-  // Unified end session function - one-shot guarded
-  const results_endSessionOnce = useCallback(() => {
-    if (testEndedRef.current) return;
-    testEndedRef.current = true;
+  // Unified results engine state with unique names
+  const [res_hasEnded, setRes_hasEnded] = useState(false);
+  const [res_startedAtMs, setRes_startedAtMs] = useState<number | null>(null);
+  const [res_firstKeyAtMs, setRes_firstKeyAtMs] = useState<number | null>(null);
+  const [res_endedAtMs, setRes_endedAtMs] = useState<number | null>(null);
+  const [res_totalCharsTyped, setRes_totalCharsTyped] = useState(0);
+  const [res_correctChars, setRes_correctChars] = useState(0);
+  const [res_incorrectChars, setRes_incorrectChars] = useState(0);
+  const [res_backspaces, setRes_backspaces] = useState(0);
+  const [res_charsCorrectBySecond, setRes_charsCorrectBySecond] = useState<number[]>([]);
+  const [res_keystrokes, setRes_keystrokes] = useState<Array<{ts: number, key: string, correct: boolean}>>([]);
+  const [res_wpmTimeline, setRes_wpmTimeline] = useState<Array<{second: number, wpm: number}>>([]);
+  
+  // Refs to track current state values for timer callbacks
+  const res_currentMetrics = useRef({
+    totalCharsTyped: 0,
+    correctChars: 0,
+    incorrectChars: 0,
+    backspaces: 0,
+    firstKeyAtMs: null as number | null,
+    startedAtMs: null as number | null,
+    charsCorrectBySecond: [] as number[],
+    wpmTimeline: [] as Array<{second: number, wpm: number}>,
+    keystrokes: [] as Array<{ts: number, key: string, correct: boolean}>
+  });
+
+  // Unified end session function - one-shot guarded with proper metrics collection
+  const endSessionOnce = useCallback((resultsInput: {
+    totalCharsTyped: number;
+    correctChars: number;
+    incorrectChars: number;
+    backspaces: number;
+    firstKeyAtMs: number | null;
+    startedAtMs: number;
+    endedAtMs: number;
+    charsCorrectBySecond: number[];
+    wpmTimeline: Array<{second: number, wpm: number}>;
+    keystrokes: Array<{ts: number, key: string, correct: boolean}>;
+  }) => {
+    if (res_hasEnded) return;
+    setRes_hasEnded(true);
+    
+    // Debug: Log the metrics being processed
+    console.log('endSessionOnce called with metrics:', {
+      totalCharsTyped: resultsInput.totalCharsTyped,
+      correctChars: resultsInput.correctChars,
+      incorrectChars: resultsInput.incorrectChars,
+      backspaces: resultsInput.backspaces,
+      elapsedMs: resultsInput.endedAtMs - resultsInput.startedAtMs,
+      keystrokesCount: resultsInput.keystrokes.length,
+      charsCorrectBySecondLength: resultsInput.charsCorrectBySecond.length
+    });
     
     // Stop all intervals/tickers
     if (timerRef.current) {
@@ -360,39 +452,46 @@ export const TypingTest = () => {
       typingBoxRef.current.endTest();
     }
     
-    // Capture final timing
-    const results_endedAtMs = Date.now();
-    const results_startedAtMs = testStartTime || results_endedAtMs;
-    const results_elapsedSeconds = Math.max(1, Math.floor((results_endedAtMs - results_startedAtMs) / 1000));
+    // Extract metrics from input
+    const {
+      totalCharsTyped,
+      correctChars,
+      incorrectChars,
+      backspaces,
+      firstKeyAtMs,
+      startedAtMs,
+      endedAtMs,
+      charsCorrectBySecond,
+      wpmTimeline,
+      keystrokes
+    } = resultsInput;
     
-    // Flush any buffered metrics - push final partial second if needed
-    if (results_elapsedSeconds > 0) {
-      const finalWpm = (analytics_correctCharsSoFar / 5) / (results_elapsedSeconds / 60);
-      setAnalytics_wpmTimeline(prev => {
-        const newTimeline = [...prev];
-        const existingIndex = newTimeline.findIndex(point => point.second === results_elapsedSeconds);
-        if (existingIndex >= 0) {
-          newTimeline[existingIndex] = { second: results_elapsedSeconds, wpm: finalWpm };
-        } else {
-          newTimeline.push({ second: results_elapsedSeconds, wpm: finalWpm });
-        }
-        return newTimeline;
-      });
+    // Compute elapsed time
+    const elapsedSeconds = Math.max(1, Math.floor((endedAtMs - startedAtMs) / 1000));
+    
+    // Build final WPM timeline from charsCorrectBySecond (skip second 0 to avoid divide-by-zero)
+    const finalWpmTimeline = charsCorrectBySecond.map((cumulativeCorrect, second) => {
+      if (second === 0) return null; // Skip second 0
+      const wpm = (cumulativeCorrect / 5) / (second / 60);
+      return { second, wpm: isFinite(wpm) ? wpm : 0 };
+    }).filter(Boolean) as Array<{second: number, wpm: number}>;
+    
+    // Add final partial second if needed
+    if (elapsedSeconds > 0 && correctChars > 0) {
+      const finalWpm = (correctChars / 5) / (elapsedSeconds / 60);
+      const existingIndex = finalWpmTimeline.findIndex(point => point.second === elapsedSeconds);
+      if (existingIndex >= 0) {
+        finalWpmTimeline[existingIndex] = { second: elapsedSeconds, wpm: finalWpm };
+      } else {
+        finalWpmTimeline.push({ second: elapsedSeconds, wpm: finalWpm });
+      }
     }
     
-    // Compute final results using same fields as manual end
-    const results_totalCharsTyped = totalTypedCharacters || 0;
-    const results_correctChars = correctCharacters || 0;
-    const results_incorrectChars = results_totalCharsTyped - results_correctChars;
-    const results_backspaces = backspaces || 0;
-    const results_firstKeyAtMs = firstKeystrokeTime || results_startedAtMs;
-    const results_wpmTimeline = analytics_wpmTimeline || [];
-    
-    // Calculate final WPM and accuracy
-    const finalWPMValue = results_elapsedSeconds > 0 ? 
-      ((results_correctChars / 5) / (results_elapsedSeconds / 60)) : 0;
-    const finalAccuracyValue = results_totalCharsTyped > 0 ? 
-      (results_correctChars / results_totalCharsTyped) * 100 : 0;
+    // Calculate final WPM and accuracy with NaN guards
+    const finalWPMValue = elapsedSeconds > 0 ? 
+      ((correctChars / 5) / (elapsedSeconds / 60)) : 0;
+    const finalAccuracyValue = totalCharsTyped > 0 ? 
+      (correctChars / totalCharsTyped) * 100 : 0;
     
     // Round to 1 decimal and guard against NaN
     const finalWPM = Math.round(finalWPMValue * 10) / 10 || 0;
@@ -403,10 +502,10 @@ export const TypingTest = () => {
     
     // Calculate behavioral metrics
     const metrics = calculateBehavioralMetrics(
-      keystrokeLog, 
-      results_wpmTimeline.map(item => item.wpm),
+      keystrokes, 
+      finalWpmTimeline.map(item => item.wpm),
       testSettings.duration,
-      results_firstKeyAtMs ? (results_firstKeyAtMs - results_startedAtMs) / 1000 : 0
+      firstKeyAtMs ? (firstKeyAtMs - startedAtMs) / 1000 : 0
     );
     setBehavioralMetrics(metrics);
     
@@ -416,9 +515,9 @@ export const TypingTest = () => {
       accuracy: finalAccuracyValue,
       consistencyScore: metrics.typingConsistencyScore,
       fatigueScore: metrics.fatigueScore,
-      backspaceCount: results_backspaces,
+      backspaceCount: backspaces,
       reactionDelay: metrics.reactionDelay,
-      wpmOverTime: results_wpmTimeline.map(item => item.wpm)
+      wpmOverTime: finalWpmTimeline.map(item => item.wpm)
     };
     const persona = analyzeTypingPersona(personaData);
     setTypingPersona(persona);
@@ -431,13 +530,13 @@ export const TypingTest = () => {
       finalWPMValue,
       finalAccuracyValue,
       persona.name,
-      results_backspaces,
-      results_totalCharsTyped,
-      results_correctChars,
-      results_incorrectChars,
+      backspaces,
+      totalCharsTyped,
+      correctChars,
+      incorrectChars,
       testSettings.duration,
       testSettings.textType,
-      results_wpmTimeline.map(item => item.wpm),
+      finalWpmTimeline.map(item => item.wpm),
       metrics.typingConsistencyScore,
       metrics.fatigueScore,
       metrics.reactionDelay,
@@ -451,7 +550,22 @@ export const TypingTest = () => {
     isStartingRef.current = false; // allow next run
     setShowResults(true); // auto-open results
     setIsTestActive(false);
-  }, [testStartTime, testSettings, correctCharacters, totalTypedCharacters, backspaces, analytics_wpmTimeline, keystrokeLog, firstKeystrokeTime, analytics_correctCharsSoFar, missedCharacters]);
+  }, [res_hasEnded, testSettings, missedCharacters]);
+  
+  // Update refs whenever state changes
+  useEffect(() => {
+    res_currentMetrics.current = {
+      totalCharsTyped: res_totalCharsTyped,
+      correctChars: res_correctChars,
+      incorrectChars: res_incorrectChars,
+      backspaces: res_backspaces,
+      firstKeyAtMs: res_firstKeyAtMs,
+      startedAtMs: res_startedAtMs,
+      charsCorrectBySecond: res_charsCorrectBySecond,
+      wpmTimeline: res_wpmTimeline,
+      keystrokes: res_keystrokes
+    };
+  }, [res_totalCharsTyped, res_correctChars, res_incorrectChars, res_backspaces, res_firstKeyAtMs, res_startedAtMs, res_charsCorrectBySecond, res_wpmTimeline, res_keystrokes]);
 
   // Check for test completion based on mode
   const checkTestCompletion = useCallback(() => {
@@ -514,34 +628,51 @@ export const TypingTest = () => {
     }
     
     if (shouldEnd) {
-      results_endSessionOnce();
+      const endedAtMs = Date.now();
+      const currentMetrics = res_currentMetrics.current;
+      const startedAtMs = currentMetrics.startedAtMs || endedAtMs;
+      
+      // Package the same metrics for completion end using current ref values
+      endSessionOnce({
+        totalCharsTyped: currentMetrics.totalCharsTyped,
+        correctChars: currentMetrics.correctChars,
+        incorrectChars: currentMetrics.incorrectChars,
+        backspaces: currentMetrics.backspaces,
+        firstKeyAtMs: currentMetrics.firstKeyAtMs,
+        startedAtMs: startedAtMs,
+        endedAtMs: endedAtMs,
+        charsCorrectBySecond: currentMetrics.charsCorrectBySecond,
+        wpmTimeline: currentMetrics.wpmTimeline,
+        keystrokes: currentMetrics.keystrokes
+      });
     }
-  }, [isTestActive, testSettings, currentPosition, expectedText, results_endSessionOnce]);
+  }, [isTestActive, testSettings, currentPosition, expectedText, endSessionOnce]);
 
-  // Handle character input - non-blocking mistakes
-  const handleCharacterInput = useCallback((char: string, index: number) => {
+  // Unified character input handler with non-blocking mistakes
+  const engine_handleCharacterInput = useCallback((char: string, index: number) => {
     if (!isTestActive || isCountingDown || isComposing) return;
     
-    if (firstKeystrokeTime === null && testStartTime) {
-      setFirstKeystrokeTime(Date.now());
+    // Record first keystroke time
+    if (res_firstKeyAtMs === null && res_startedAtMs) {
+      setRes_firstKeyAtMs(Date.now());
     }
     
-    const timestamp = testStartTime ? (Date.now() - testStartTime) / 1000 : 0;
+    const timestamp = res_startedAtMs ? (Date.now() - res_startedAtMs) / 1000 : 0;
     
     // Update position tracking
     setCurrentPosition(index);
     
-    // Check if character is correct
+    // Check if character is correct (exact comparison including space, punctuation, numbers)
     const expectedChar = expectedText[index];
     const isCorrect = char === expectedChar;
     
     // Always increment total characters typed
-    setTotalTypedCharacters(prev => prev + 1);
+    setRes_totalCharsTyped(prev => prev + 1);
     
     if (isCorrect) {
-      setCorrectCharacters(prev => prev + 1);
-      setAnalytics_correctCharsSoFar(prev => prev + 1);
+      setRes_correctChars(prev => prev + 1);
     } else {
+      setRes_incorrectChars(prev => prev + 1);
       // Track missed characters for analytics
       setMissedCharacters(prev => ({
         ...prev,
@@ -563,23 +694,25 @@ export const TypingTest = () => {
       return newStatus;
     });
     
-    // Log keystroke
-    const keystrokeData: KeystrokeData = {
+    // Log keystroke with new format
+    const keystrokeData = {
+      ts: timestamp,
       key: char,
-      keyId: char,
-      correct: isCorrect,
-      timestamp,
-      position: index
+      correct: isCorrect
     };
-    setKeystrokeLog(prev => [...prev, keystrokeData]);
+    setRes_keystrokes(prev => [...prev, keystrokeData]);
     
-    // Update WPM timeline
+    // Update WPM timeline per second
     const elapsedSeconds = Math.floor(timestamp);
     if (elapsedSeconds > 0) {
-      const wpm = (analytics_correctCharsSoFar / 5) / (elapsedSeconds / 60);
-      setAnalytics_wpmTimeline(prev => {
+      setRes_wpmTimeline(prev => {
         const newTimeline = [...prev];
         const existingIndex = newTimeline.findIndex(point => point.second === elapsedSeconds);
+        
+        // Calculate current correct chars for this second
+        const currentCorrectChars = res_correctChars + (isCorrect ? 1 : 0);
+        const wpm = (currentCorrectChars / 5) / (elapsedSeconds / 60);
+        
         if (existingIndex >= 0) {
           newTimeline[existingIndex] = { second: elapsedSeconds, wpm };
         } else {
@@ -587,11 +720,19 @@ export const TypingTest = () => {
         }
         return newTimeline;
       });
+      
+      // Update chars correct by second (cumulative)
+      setRes_charsCorrectBySecond(prev => {
+        const newArray = [...prev];
+        const currentCorrectChars = res_correctChars + (isCorrect ? 1 : 0);
+        newArray[elapsedSeconds] = currentCorrectChars;
+        return newArray;
+      });
     }
     
     // Check for test completion based on mode
     checkTestCompletion();
-  }, [isTestActive, isCountingDown, isComposing, firstKeystrokeTime, testStartTime, expectedText, analytics_correctCharsSoFar]);
+  }, [isTestActive, isCountingDown, isComposing, res_firstKeyAtMs, res_startedAtMs, expectedText, res_correctChars]);
 
   // Handle space
   const handleSpace = useCallback(() => {
@@ -603,31 +744,42 @@ export const TypingTest = () => {
     // as the space handling is now done in handleCharacterInput
   }, [isTestActive, isCountingDown, isComposing]);
 
-  // Handle backspace
-  const handleBackspace = useCallback(() => {
+  // Handle backspace with new engine
+  const engine_handleBackspace = useCallback(() => {
     if (!isTestActive || isCountingDown || isComposing) return;
     
-    setBackspaces(prev => prev + 1);
+    // Increment backspace count
+    setRes_backspaces(prev => prev + 1);
     
-    // Move back one position
+    // Move back one position (do not go below 0)
     if (currentPosition > 0) {
-      setCurrentPosition(prev => prev - 1);
+      const newPosition = currentPosition - 1;
+      setCurrentPosition(newPosition);
       
       // Reset character status to pending
       setCharacterStatus(prev => {
         const newStatus = [...prev];
-        newStatus[currentPosition - 1] = 'pending';
+        newStatus[newPosition] = 'pending';
         return newStatus;
       });
       
       // Clear typed character
       setTypedCharacters(prev => {
         const newArray = [...prev];
-        newArray[currentPosition - 1] = '';
+        newArray[newPosition] = '';
         return newArray;
       });
+      
+      // Decrement counters based on what was at that position
+      const wasCorrect = characterStatus[newPosition] === 'correct';
+      if (wasCorrect) {
+        setRes_correctChars(prev => prev - 1);
+      } else if (characterStatus[newPosition] === 'incorrect') {
+        setRes_incorrectChars(prev => prev - 1);
+      }
+      setRes_totalCharsTyped(prev => prev - 1);
     }
-  }, [isTestActive, isCountingDown, isComposing, currentPosition]);
+  }, [isTestActive, isCountingDown, isComposing, currentPosition, characterStatus]);
 
   // Handle composition events
   const handleCompositionStart = useCallback(() => {
@@ -777,9 +929,9 @@ export const TypingTest = () => {
                     <TypingBox
                       ref={typingBoxRef}
                       text={expectedText}
-                      onCharacterInput={handleCharacterInput}
+                      onCharacterInput={engine_handleCharacterInput}
                       onSpace={handleSpace}
-                      onBackspace={handleBackspace}
+                      onBackspace={engine_handleBackspace}
                       onCompositionStart={handleCompositionStart}
                       onCompositionEnd={handleCompositionEnd}
                       isActive={isTestActive}
@@ -792,7 +944,35 @@ export const TypingTest = () => {
                     {isTestActive && (
                       <div className="mt-4 text-center">
                         <Button
-                          onClick={results_endSessionOnce}
+                          onClick={() => {
+                            const endedAtMs = Date.now();
+                            const currentMetrics = res_currentMetrics.current;
+                            const startedAtMs = currentMetrics.startedAtMs || endedAtMs;
+                            
+                            // Debug: Log manual end metrics
+                            console.log('Manual end - current metrics:', {
+                              totalCharsTyped: currentMetrics.totalCharsTyped,
+                              correctChars: currentMetrics.correctChars,
+                              incorrectChars: currentMetrics.incorrectChars,
+                              backspaces: currentMetrics.backspaces,
+                              elapsedMs: endedAtMs - startedAtMs,
+                              keystrokesCount: currentMetrics.keystrokes.length
+                            });
+                            
+                            // Package the same metrics for manual end using current ref values
+                            endSessionOnce({
+                              totalCharsTyped: currentMetrics.totalCharsTyped,
+                              correctChars: currentMetrics.correctChars,
+                              incorrectChars: currentMetrics.incorrectChars,
+                              backspaces: currentMetrics.backspaces,
+                              firstKeyAtMs: currentMetrics.firstKeyAtMs,
+                              startedAtMs: startedAtMs,
+                              endedAtMs: endedAtMs,
+                              charsCorrectBySecond: currentMetrics.charsCorrectBySecond,
+                              wpmTimeline: currentMetrics.wpmTimeline,
+                              keystrokes: currentMetrics.keystrokes
+                            });
+                          }}
                           className="px-6 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors font-medium"
                         >
                           End Test
