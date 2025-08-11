@@ -51,7 +51,7 @@ export const TypingBox = forwardRef<TypingBoxRef, TypingBoxProps>(({
   useImperativeHandle(ref, () => ({
     focus: () => {
       if (inputRef.current) {
-        inputRef.current.focus();
+        inputRef.current.focus({ preventScroll: true });
       }
     },
     startTest: () => {
@@ -139,7 +139,7 @@ export const TypingBox = forwardRef<TypingBoxRef, TypingBoxProps>(({
     });
   }, []);
 
-  // Handle character input
+  // Handle character input - non-blocking mistakes
   const handleInput = useCallback((e: React.FormEvent<HTMLInputElement>) => {
     if (!typingBox_isRunning.current || typingBox_isComposing.current || mode === 'zen') return;
     
@@ -159,14 +159,12 @@ export const TypingBox = forwardRef<TypingBoxRef, TypingBoxProps>(({
       // Always call onCharacterInput with the typed character and current index
       onCharacterInput(currentChar, currentIndex);
       
-      // Update character state
-      if (isCorrect) {
-        typingBox_index.current++;
-        
-        // Check if we need to handle space
-        if (currentIndex + 1 < typingBox_chars.current.length && typingBox_chars.current[currentIndex + 1] === ' ') {
-          onSpace();
-        }
+      // ALWAYS advance the index - mistakes don't block typing
+      typingBox_index.current++;
+      
+      // Check if we need to handle space (only if we're at a space character)
+      if (currentIndex + 1 < typingBox_chars.current.length && typingBox_chars.current[currentIndex + 1] === ' ') {
+        onSpace();
       }
       
       // Update visual states

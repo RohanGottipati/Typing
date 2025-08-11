@@ -173,11 +173,17 @@ export const TypingTest = () => {
     return generateText(options);
   }, [testSettings]);
 
-  // Start test function - optimized to prevent UI freeze
-  const startTest = useCallback(() => {
+  // Unified restart function - handles both initial start and restart from results
+  const handleRestartTest = useCallback(() => {
     // Re-entrancy guard
     if (isStartingRef.current || isRunning) return;
     isStartingRef.current = true;
+    
+    // Clear any existing timers and intervals
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
     
     // Immediate UI feedback - disable button and show loading state
     setIsRunning(true);
@@ -185,6 +191,49 @@ export const TypingTest = () => {
     setShowResults(false);
     setIsEnded(false);
     testEndedRef.current = false;
+    
+    // Reset all state completely
+    setShowCountdown(false);
+    setIsCountingDown(false);
+    setTimeRemaining(0);
+    setTestStartTime(null);
+    setCountdown(null);
+    setCurrentPosition(0);
+    setTypedCharacters([]);
+    setCharacterStatus([]);
+    setActiveWordIdx(0);
+    setActiveCharIdx(0);
+    setWordList([]);
+    setCharStates([]);
+    setIsComposing(false);
+    setCorrectCharacters(0);
+    setTotalTypedCharacters(0);
+    setBackspaces(0);
+    setMissedCharacters({});
+    setWordsCompleted(0);
+    setQuoteAuthor('');
+    setLiveWPM(0);
+    setFirstKeystrokeTime(null);
+    setAnalytics_wpmTimeline([]);
+    setAnalytics_correctCharsSoFar(0);
+    setKeystrokeLog([]);
+    setZenContent('');
+    setExpectedText('');
+    
+    // Reset results state
+    testEndedRef.current = false;
+    setShowResults(false);
+    setFinalWPM(0);
+    setFinalAccuracy(0);
+    setBehavioralMetrics({
+      typingConsistencyScore: 0,
+      fatigueScore: 0,
+      reactionDelay: 0,
+      topErrorHotspots: [],
+      topBackspaceHotspots: []
+    });
+    setTypingPersona(null);
+    setPersonaInsights([]);
     
     // Use setTimeout to defer heavy work and allow UI to update
     setTimeout(() => {
@@ -243,28 +292,22 @@ export const TypingTest = () => {
                 timerRef.current = setInterval(() => {
                   setTimeRemaining(prev => {
                     if (prev <= 1) {
-                      // End test when timer reaches 0
+                      // End test when timer reaches 0 - use unified end function
                       if (testEndedRef.current) return 0;
-                      testEndedRef.current = true;
-                      setIsEnded(true);
-                      if (timerRef.current) {
-                        clearInterval(timerRef.current);
-                      }
-                      setIsRunning(false);
-                      isStartingRef.current = false;
-                      setShowResults(true);
-                      setIsTestActive(false);
+                      results_endSessionOnce();
                       return 0;
                     }
                     return prev - 1;
                   });
                 }, 1000);
                 
-                // Activate test and start typing viewport imperatively
+                // Activate test and start typing box imperatively
                 setIsTestActive(true);
                 setTimeout(() => {
                   if (typingBoxRef.current) {
                     typingBoxRef.current.startTest();
+                    // Focus the typing box with preventScroll
+                    typingBoxRef.current.focus();
                   }
                 }, 50);
                 
@@ -283,6 +326,8 @@ export const TypingTest = () => {
           setTimeout(() => {
             if (typingBoxRef.current) {
               typingBoxRef.current.startTest();
+              // Focus the typing box with preventScroll
+              typingBoxRef.current.focus();
             }
           }, 50);
         }
@@ -299,13 +344,15 @@ export const TypingTest = () => {
     }, 0); // Use 0ms timeout to defer to next tick
   }, [testSettings, generateTextForMode]);
 
-  // Finalize test function
-  const finalizeTest = useCallback(() => {
+  // Unified end session function - one-shot guarded
+  const results_endSessionOnce = useCallback(() => {
     if (testEndedRef.current) return;
     testEndedRef.current = true;
     
+    // Stop all intervals/tickers
     if (timerRef.current) {
       clearInterval(timerRef.current);
+      timerRef.current = null;
     }
     
     // End the typing box imperatively
@@ -313,21 +360,53 @@ export const TypingTest = () => {
       typingBoxRef.current.endTest();
     }
     
-    const testDurationMs = testStartTime ? Date.now() - testStartTime : 0;
-    const testDurationMinutes = testDurationMs / 60000;
+    // Capture final timing
+    const results_endedAtMs = Date.now();
+    const results_startedAtMs = testStartTime || results_endedAtMs;
+    const results_elapsedSeconds = Math.max(1, Math.floor((results_endedAtMs - results_startedAtMs) / 1000));
     
-    const finalWPMValue = testDurationMinutes > 0 ? (correctCharacters / 5) / testDurationMinutes : 0;
-    const finalAccuracyValue = totalTypedCharacters > 0 ? (correctCharacters / totalTypedCharacters) * 100 : 0;
+    // Flush any buffered metrics - push final partial second if needed
+    if (results_elapsedSeconds > 0) {
+      const finalWpm = (analytics_correctCharsSoFar / 5) / (results_elapsedSeconds / 60);
+      setAnalytics_wpmTimeline(prev => {
+        const newTimeline = [...prev];
+        const existingIndex = newTimeline.findIndex(point => point.second === results_elapsedSeconds);
+        if (existingIndex >= 0) {
+          newTimeline[existingIndex] = { second: results_elapsedSeconds, wpm: finalWpm };
+        } else {
+          newTimeline.push({ second: results_elapsedSeconds, wpm: finalWpm });
+        }
+        return newTimeline;
+      });
+    }
     
-    setFinalWPM(Math.round(finalWPMValue));
-    setFinalAccuracy(Math.round(finalAccuracyValue * 10) / 10);
+    // Compute final results using same fields as manual end
+    const results_totalCharsTyped = totalTypedCharacters || 0;
+    const results_correctChars = correctCharacters || 0;
+    const results_incorrectChars = results_totalCharsTyped - results_correctChars;
+    const results_backspaces = backspaces || 0;
+    const results_firstKeyAtMs = firstKeystrokeTime || results_startedAtMs;
+    const results_wpmTimeline = analytics_wpmTimeline || [];
+    
+    // Calculate final WPM and accuracy
+    const finalWPMValue = results_elapsedSeconds > 0 ? 
+      ((results_correctChars / 5) / (results_elapsedSeconds / 60)) : 0;
+    const finalAccuracyValue = results_totalCharsTyped > 0 ? 
+      (results_correctChars / results_totalCharsTyped) * 100 : 0;
+    
+    // Round to 1 decimal and guard against NaN
+    const finalWPM = Math.round(finalWPMValue * 10) / 10 || 0;
+    const finalAccuracy = Math.round(finalAccuracyValue * 10) / 10 || 0;
+    
+    setFinalWPM(finalWPM);
+    setFinalAccuracy(finalAccuracy);
     
     // Calculate behavioral metrics
     const metrics = calculateBehavioralMetrics(
       keystrokeLog, 
-      analytics_wpmTimeline.map(item => item.wpm),
+      results_wpmTimeline.map(item => item.wpm),
       testSettings.duration,
-      firstKeystrokeTime ? (firstKeystrokeTime - testStartTime!) / 1000 : 0
+      results_firstKeyAtMs ? (results_firstKeyAtMs - results_startedAtMs) / 1000 : 0
     );
     setBehavioralMetrics(metrics);
     
@@ -337,9 +416,9 @@ export const TypingTest = () => {
       accuracy: finalAccuracyValue,
       consistencyScore: metrics.typingConsistencyScore,
       fatigueScore: metrics.fatigueScore,
-      backspaceCount: backspaces,
+      backspaceCount: results_backspaces,
       reactionDelay: metrics.reactionDelay,
-      wpmOverTime: analytics_wpmTimeline.map(item => item.wpm)
+      wpmOverTime: results_wpmTimeline.map(item => item.wpm)
     };
     const persona = analyzeTypingPersona(personaData);
     setTypingPersona(persona);
@@ -352,13 +431,13 @@ export const TypingTest = () => {
       finalWPMValue,
       finalAccuracyValue,
       persona.name,
-      backspaces,
-      totalTypedCharacters,
-      correctCharacters,
-      totalTypedCharacters - correctCharacters,
+      results_backspaces,
+      results_totalCharsTyped,
+      results_correctChars,
+      results_incorrectChars,
       testSettings.duration,
       testSettings.textType,
-      analytics_wpmTimeline.map(item => item.wpm),
+      results_wpmTimeline.map(item => item.wpm),
       metrics.typingConsistencyScore,
       metrics.fatigueScore,
       metrics.reactionDelay,
@@ -372,7 +451,7 @@ export const TypingTest = () => {
     isStartingRef.current = false; // allow next run
     setShowResults(true); // auto-open results
     setIsTestActive(false);
-  }, [testStartTime, testSettings, correctCharacters, totalTypedCharacters, backspaces, analytics_wpmTimeline, keystrokeLog, firstKeystrokeTime, activeWordIdx, activeCharIdx, wordList]);
+  }, [testStartTime, testSettings, correctCharacters, totalTypedCharacters, backspaces, analytics_wpmTimeline, keystrokeLog, firstKeystrokeTime, analytics_correctCharsSoFar, missedCharacters]);
 
   // Check for test completion based on mode
   const checkTestCompletion = useCallback(() => {
@@ -435,11 +514,11 @@ export const TypingTest = () => {
     }
     
     if (shouldEnd) {
-      finalizeTest();
+      results_endSessionOnce();
     }
-  }, [isTestActive, testSettings, currentPosition, expectedText, finalizeTest]);
+  }, [isTestActive, testSettings, currentPosition, expectedText, results_endSessionOnce]);
 
-  // Handle character input
+  // Handle character input - non-blocking mistakes
   const handleCharacterInput = useCallback((char: string, index: number) => {
     if (!isTestActive || isCountingDown || isComposing) return;
     
@@ -456,17 +535,19 @@ export const TypingTest = () => {
     const expectedChar = expectedText[index];
     const isCorrect = char === expectedChar;
     
+    // Always increment total characters typed
+    setTotalTypedCharacters(prev => prev + 1);
+    
     if (isCorrect) {
       setCorrectCharacters(prev => prev + 1);
       setAnalytics_correctCharsSoFar(prev => prev + 1);
     } else {
+      // Track missed characters for analytics
       setMissedCharacters(prev => ({
         ...prev,
         [expectedChar]: (prev[expectedChar] || 0) + 1
       }));
     }
-    
-    setTotalTypedCharacters(prev => prev + 1);
     
     // Update typed characters array
     setTypedCharacters(prev => {
@@ -475,7 +556,7 @@ export const TypingTest = () => {
       return newArray;
     });
     
-    // Update character status
+    // Update character status - mark as correct or incorrect
     setCharacterStatus(prev => {
       const newStatus = [...prev];
       newStatus[index] = isCorrect ? 'correct' : 'incorrect';
@@ -624,7 +705,7 @@ export const TypingTest = () => {
           <AnalyticsDashboard />
         ) : (
           <>
-            {!isTestActive && (
+            {!isTestActive && !showResults && (
               <div className="space-y-6">
                 <div className="text-center">
                   <TestConfig settings={testSettings} onSettingsChange={setTestSettings} />
@@ -635,7 +716,7 @@ export const TypingTest = () => {
                     type="button"
                     aria-label="Start Test"
                     disabled={isRunning}
-                    onClick={startTest}
+                    onClick={handleRestartTest}
                     className="bg-cyan-600 hover:bg-cyan-700 text-white border border-cyan-500 shadow-lg shadow-cyan-500/25 px-8 py-3 text-lg btn-hover btn-active disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {isRunning ? 'Starting...' : 'Start Test'}
@@ -644,20 +725,7 @@ export const TypingTest = () => {
               </div>
             )}
 
-            {showResults && (
-              <div className="text-center mb-6">
-                <Button 
-                  id="start-new-test"
-                  type="button"
-                  aria-label="Start New Test"
-                  disabled={isRunning}
-                  onClick={startTest}
-                  className="bg-cyan-600 hover:bg-cyan-700 text-white border border-cyan-500 shadow-lg shadow-cyan-500/25 px-8 py-3 text-lg btn-hover btn-active disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {isRunning ? 'Starting...' : 'Start New Test'}
-                </Button>
-              </div>
-            )}
+
 
             {isTestActive && (
               <div className="space-y-6">
@@ -724,7 +792,7 @@ export const TypingTest = () => {
                     {isTestActive && (
                       <div className="mt-4 text-center">
                         <Button
-                          onClick={finalizeTest}
+                          onClick={results_endSessionOnce}
                           className="px-6 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors font-medium"
                         >
                           End Test
@@ -900,6 +968,19 @@ export const TypingTest = () => {
                     </div>
                   </div>
 
+                  {/* Single Start New Test Button */}
+                  <div className="text-center mt-8">
+                    <Button 
+                      id="start-new-test"
+                      type="button"
+                      aria-label="Start New Test"
+                      disabled={isRunning}
+                      onClick={handleRestartTest}
+                      className="bg-cyan-600 hover:bg-cyan-700 text-white border border-cyan-500 shadow-lg shadow-cyan-500/25 px-8 py-3 text-lg btn-hover btn-active disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {isRunning ? 'Starting...' : 'Start New Test'}
+                    </Button>
+                  </div>
 
                 </div>
               </div>
