@@ -1,4 +1,4 @@
-# Type Flow Forge
+# Typora
 
 A modern, feature-rich typing test application built with React, TypeScript, and Tailwind CSS. Test your typing speed and accuracy with customizable test modes and real-time analytics.
 
@@ -22,10 +22,10 @@ A modern, feature-rich typing test application built with React, TypeScript, and
 
 ```bash
 # Clone the repository
-git clone https://github.com/RohanGottipati/type-flow-forge.git
+git clone https://github.com/RohanGottipati/Typora.git
 
 # Navigate to the project directory
-cd type-flow-forge
+cd Typora
 
 # Install dependencies
 npm install
