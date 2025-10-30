@@ -20,10 +20,10 @@ A typing test application built with React, TypeScript, and Tailwind CSS. Test y
 
 ```bash
 # Clone the repository
-git clone https://github.com/RohanGottipati/Typora.git
+git clone https://github.com/RohanGottipati/Typing_Test.git
 
 # Navigate to the project directory
-cd Typora
+cd Typing_Test
 
 # Install dependencies
 npm install

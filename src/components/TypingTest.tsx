@@ -808,23 +808,12 @@ export const TypingTest = () => {
   }, [firstKeystrokeTime, testStartTime]);
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-blue-900 to-green-900 p-4">
+    <div className="min-h-screen bg-black p-4">
       <div className="max-w-4xl mx-auto space-y-6">
         {/* Header */}
         <div className="text-center space-y-4 fade-in">
-          <h1 
-            className="text-3xl font-bold text-cyan-100 cursor-pointer hover:text-cyan-200 transition-all duration-200 btn-hover"
-            onClick={() => {
-              setCurrentView('main');
-              setIsTestActive(false);
-              setShowResults(false);
-            }}
-            title="Click to return to home"
-          >
-            Typora
-          </h1>
-          <p className="text-green-200 fade-in stagger-1">Test your typing speed and accuracy</p>
-        
+          {/* Title removed as requested */}
+          
           {/* Navigation */}
           <div className="flex justify-center space-x-4">
             <Button
