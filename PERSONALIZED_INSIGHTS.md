@@ -224,3 +224,4 @@ const generateInsights = useCallback((results: ResultsData, keystrokes: Keystrok
 - **Confidence building** through positive feedback
 
 **The personalized insights system provides intelligent, actionable feedback to help users improve their typing performance effectively.** 
+_Last updated: 2025-10-30_
