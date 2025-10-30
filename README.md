@@ -1,5 +1,7 @@
 A typing test application built with React, TypeScript, and Tailwind CSS. Test your typing speed and accuracy with customizable test modes and real-time analytics.
 
+> Tip: Use Node 18+ and npm/yarn.
+
 ## Features
 
 - **Multiple Test Durations**: 15s, 30s, 60s, 120s
