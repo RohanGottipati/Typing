@@ -92,3 +92,6 @@ Currently using stub data for development.
 ## License
 
 MIT License - see LICENSE file for details
+
+## Notes
+- Documented by housekeeping updates.
