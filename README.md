@@ -1,4 +1,4 @@
-A typing test application built with React, TypeScript, and Tailwind CSS. Test your typing speed and accuracy with customizable test modes and real-time analytics.
+A typing test application built with React, TypeScript, and Tailwind CSS Inspired by MonkeyType. Test your typing speed and accuracy with customizable test modes and real-time analytics.
 
 > Tip: Use Node 18+ and npm/yarn.
 
