@@ -253,7 +253,7 @@ export const AnalyticsDashboard: React.FC = () => {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-900 via-blue-900 to-green-900 p-4">
+      <div className="min-h-screen bg-black p-4">
         <div className="max-w-7xl mx-auto">
           <div className="flex items-center justify-center h-64">
             <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-cyan-400"></div>
@@ -265,9 +265,9 @@ export const AnalyticsDashboard: React.FC = () => {
 
   if (!filteredData || filteredData.sessions.length === 0) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-900 via-blue-900 to-green-900 p-4">
+      <div className="min-h-screen bg-black p-4">
         <div className="max-w-7xl mx-auto">
-          <Card className="bg-gray-800 border border-cyan-600 shadow-lg shadow-cyan-500/25">
+          <Card className="bg-gray-900 border border-cyan-600 shadow-lg shadow-cyan-500/25">
             <CardContent className="p-8 text-center">
               <div className="text-4xl mb-4">📊</div>
               <h2 className="text-2xl font-bold text-cyan-100 mb-2">No Data Available</h2>
@@ -280,16 +280,16 @@ export const AnalyticsDashboard: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-blue-900 to-green-900 p-4">
+    <div className="min-h-screen bg-black p-4">
       <div className="max-w-7xl mx-auto space-y-6">
         {/* Header */}
         <div className="text-center space-y-2 fade-in">
           <h1 className="text-4xl font-bold text-cyan-100">Analytics Dashboard</h1>
-          <p className="text-green-200 stagger-1">Comprehensive analysis of your typing performance</p>
+          <p className="text-cyan-200 stagger-1">Comprehensive analysis of your typing performance</p>
         </div>
 
         {/* Filters */}
-        <Card className="bg-gray-800 border border-cyan-600 shadow-lg shadow-cyan-500/25 card-entrance">
+        <Card className="bg-gray-900 border border-cyan-600 shadow-lg shadow-cyan-500/25 card-entrance">
           <CardHeader>
             <CardTitle className="text-cyan-100">Filters</CardTitle>
           </CardHeader>
@@ -298,10 +298,10 @@ export const AnalyticsDashboard: React.FC = () => {
               <div>
                 <Label className="text-cyan-200">Mode</Label>
                 <Select value={filters.mode} onValueChange={(value) => setFilters(prev => ({ ...prev, mode: value }))}>
-                  <SelectTrigger className="bg-gray-700 border-cyan-600 text-cyan-100">
+                  <SelectTrigger className="bg-gray-800 border-cyan-600 text-cyan-100">
                     <SelectValue />
                   </SelectTrigger>
-                  <SelectContent className="bg-gray-700 border-cyan-600">
+                  <SelectContent className="bg-gray-800 border-cyan-600">
                     <SelectItem value="all">All Modes</SelectItem>
                     <SelectItem value="time">Time</SelectItem>
                     <SelectItem value="words">Words</SelectItem>
@@ -318,7 +318,7 @@ export const AnalyticsDashboard: React.FC = () => {
                   type="date"
                   value={filters.dateFrom}
                   onChange={(e) => setFilters(prev => ({ ...prev, dateFrom: e.target.value }))}
-                  className="bg-gray-700 border-cyan-600 text-cyan-100"
+                  className="bg-gray-800 border-cyan-600 text-cyan-100"
                 />
               </div>
               
@@ -328,7 +328,7 @@ export const AnalyticsDashboard: React.FC = () => {
                   type="date"
                   value={filters.dateTo}
                   onChange={(e) => setFilters(prev => ({ ...prev, dateTo: e.target.value }))}
-                  className="bg-gray-700 border-cyan-600 text-cyan-100"
+                  className="bg-gray-800 border-cyan-600 text-cyan-100"
                 />
               </div>
               
@@ -339,7 +339,7 @@ export const AnalyticsDashboard: React.FC = () => {
                   placeholder="0"
                   value={filters.minWPM}
                   onChange={(e) => setFilters(prev => ({ ...prev, minWPM: e.target.value }))}
-                  className="bg-gray-700 border-cyan-600 text-cyan-100"
+                  className="bg-gray-800 border-cyan-600 text-cyan-100"
                 />
               </div>
               
@@ -350,7 +350,7 @@ export const AnalyticsDashboard: React.FC = () => {
                   placeholder="200"
                   value={filters.maxWPM}
                   onChange={(e) => setFilters(prev => ({ ...prev, maxWPM: e.target.value }))}
-                  className="bg-gray-700 border-cyan-600 text-cyan-100"
+                  className="bg-gray-800 border-cyan-600 text-cyan-100"
                 />
               </div>
               
@@ -368,28 +368,28 @@ export const AnalyticsDashboard: React.FC = () => {
 
         {/* Summary Stats */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          <Card className="bg-gray-800 border border-cyan-600 shadow-lg shadow-cyan-500/25 card-entrance stagger-1">
+          <Card className="bg-gray-900 border border-cyan-600 shadow-lg shadow-cyan-500/25 card-entrance stagger-1">
             <CardContent className="p-6 text-center">
               <div className="text-3xl font-bold text-cyan-400">{filteredData.summary.totalTests}</div>
               <p className="text-cyan-200 text-sm">Total Tests</p>
             </CardContent>
           </Card>
           
-          <Card className="bg-gray-800 border border-cyan-600 shadow-lg shadow-cyan-500/25 card-entrance stagger-2">
+          <Card className="bg-gray-900 border border-cyan-600 shadow-lg shadow-cyan-500/25 card-entrance stagger-2">
             <CardContent className="p-6 text-center">
               <div className="text-3xl font-bold text-green-400">{filteredData.summary.bestWPM.toFixed(1)}</div>
               <p className="text-cyan-200 text-sm">Best WPM</p>
             </CardContent>
           </Card>
           
-          <Card className="bg-gray-800 border border-cyan-600 shadow-lg shadow-cyan-500/25 card-entrance stagger-3">
+          <Card className="bg-gray-900 border border-cyan-600 shadow-lg shadow-cyan-500/25 card-entrance stagger-3">
             <CardContent className="p-6 text-center">
-              <div className="text-3xl font-bold text-blue-400">{filteredData.summary.averageWPM.toFixed(1)}</div>
+              <div className="text-3xl font-bold text-cyan-400">{filteredData.summary.averageWPM.toFixed(1)}</div>
               <p className="text-cyan-200 text-sm">Average WPM</p>
             </CardContent>
           </Card>
           
-          <Card className="bg-gray-800 border border-cyan-600 shadow-lg shadow-cyan-500/25 card-entrance stagger-4">
+          <Card className="bg-gray-900 border border-cyan-600 shadow-lg shadow-cyan-500/25 card-entrance stagger-4">
             <CardContent className="p-6 text-center">
               <div className="text-3xl font-bold text-yellow-400">{filteredData.summary.averageAccuracy.toFixed(1)}%</div>
               <p className="text-cyan-200 text-sm">Average Accuracy</p>
@@ -400,7 +400,7 @@ export const AnalyticsDashboard: React.FC = () => {
         {/* Charts */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* WPM Trend */}
-          <Card className="bg-gray-800 border border-cyan-600 shadow-lg shadow-cyan-500/25 card-entrance stagger-1">
+          <Card className="bg-gray-900 border border-cyan-600 shadow-lg shadow-cyan-500/25 card-entrance stagger-1">
             <CardHeader>
               <CardTitle className="text-cyan-100">WPM Over Time</CardTitle>
             </CardHeader>
@@ -425,7 +425,7 @@ export const AnalyticsDashboard: React.FC = () => {
           </Card>
 
           {/* Accuracy Trend */}
-          <Card className="bg-gray-800 border border-cyan-600 shadow-lg shadow-cyan-500/25 card-entrance stagger-2">
+          <Card className="bg-gray-900 border border-cyan-600 shadow-lg shadow-cyan-500/25 card-entrance stagger-2">
             <CardHeader>
               <CardTitle className="text-cyan-100">Accuracy Over Time</CardTitle>
             </CardHeader>
