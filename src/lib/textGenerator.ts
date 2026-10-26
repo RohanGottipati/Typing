@@ -291,24 +291,3 @@ export const generateExactWordCount = (wordCount: number, options: TextGenerator
   console.log('🔧 generateExactWordCount final result:', { text, length: text.length, wordCount: text.split(/\s+/).length });
   return text;
 };
-
-// Function to process existing text based on toggles
-export const processExistingText = (text: string, options: TextGeneratorOptions): string => {
-  const { includeNumbers, includePunctuation } = options;
-  let processedText = text;
-  
-  if (!includePunctuation) {
-    // Remove punctuation but keep basic structure
-    processedText = processedText.replace(/[.,!?;:'"()]/g, '');
-  }
-  
-  if (!includeNumbers) {
-    // Remove numbers
-    processedText = processedText.replace(/\d+/g, '');
-  }
-  
-  // Clean up extra spaces
-  processedText = processedText.replace(/\s+/g, ' ').trim();
-  
-  return processedText;
-};

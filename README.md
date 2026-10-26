@@ -1,99 +1,92 @@
-A typing test application built with React, TypeScript, and Tailwind CSS Inspired by MonkeyType. Test your typing speed and accuracy with customizable test modes and real-time analytics.
+# Typing Test
 
-> Tip: Use Node 18+ and npm/yarn.
+A MonkeyType-inspired typing test built with React, TypeScript and Tailwind CSS that records every keystroke and turns it into post-test analytics, a typing "persona" and a history of your sessions — all in the browser.
 
 ## Features
 
-- **Multiple Test Durations**: 15s, 30s, 60s, 120s
-- **Text Modes**: Natural Sentences, Famous Quotes, Code Snippets
-- **Real-time Analytics**: Live WPM, accuracy, and backspace tracking
-- **Detailed Results**: Post-test analysis with charts and insights
-- **Responsive Design**: Works on desktop and mobile devices
-- **Modern UI**: Built with shadcn/ui components
+- **Test modes**: `time` (15 / 30 / 60 / 120 s), `words` (custom word count), `quote` (random famous quote), `zen` (free typing) and `custom` (paste your own text, with optional time or word limit).
+- **Text options**: toggle punctuation and numbers in generated text.
+- **Live feedback**: 3-second countdown before timed tests, remaining time and live WPM while typing.
+- **Results**: WPM, accuracy and backspace stats, behavioral insights, error & correction analysis, a typing persona (e.g. "The Sprinter", "The Perfectionist") with personalised tips, and a next-session WPM prediction from a simple linear regression over past sessions.
+- **Export**: download a session as CSV or JSON.
+- **Session history**: the last 50 sessions are stored in `localStorage` and can be reviewed or cleared.
+- **Analytics dashboard**: filter saved sessions by mode, date and WPM range and chart WPM / accuracy over time (Recharts).
 
-## Getting Started
+There is no backend: all data stays in the browser's `localStorage` (`typing-sessions` for sessions, `typing-test-settings` for the last-used settings).
 
-### Prerequisites
+## Tech stack
 
-- Node.js 18+ 
-- npm or yarn
+- React 18 + TypeScript, built with Vite 5 (`@vitejs/plugin-react-swc`)
+- Tailwind CSS with a small set of shadcn/ui components (Radix UI)
+- Recharts for charts
+- React Router and TanStack Query (app shell)
+- ESLint 9 (`typescript-eslint`)
 
-### Installation
-
-```bash
-# Clone the repository
-git clone https://github.com/RohanGottipati/Typing_Test.git
-
-# Navigate to the project directory
-cd Typing_Test
-
-# Install dependencies
-npm install
-
-# Start the development server
-npm run dev
-```
-
-The application will be available at `http://localhost:5173`
-
-### Building for Production
-
-```bash
-# Build the application
-npm run build
-
-# Preview the production build
-npm run preview
-```
-
-## Project Structure
+## Project structure
 
 ```
 src/
-├── components/          # React components
-│   ├── ui/             # shadcn/ui components
-│   ├── TypingTest.tsx  # Main typing test component
-│   ├── TypingArea.tsx  # Typing interface
-│   ├── LiveMetrics.tsx # Real-time statistics
-│   ├── ResultDashboard.tsx # Post-test results
-│   └── TestConfig.tsx  # Test configuration
-├── pages/              # Page components
-├── hooks/              # Custom React hooks
-├── lib/                # Utility functions
-└── App.tsx            # Main application component
+├── main.tsx / App.tsx       # Entry point, providers and routes (/ and a 404 page)
+├── pages/                   # Index (renders TypingTest) and NotFound
+├── components/
+│   ├── TypingTest.tsx       # Main test flow: config, typing, results, navigation
+│   ├── TestConfig.tsx       # Mode / duration / toggle selector
+│   ├── TypingBox.tsx        # Typing surface and keystroke capture
+│   ├── AnalyticsDashboard.tsx
+│   ├── SessionHistory.tsx
+│   ├── BehavioralInsights.tsx, ErrorAnalysis.tsx, WPMPrediction.tsx
+│   ├── ErrorBoundary.tsx
+│   └── ui/                  # shadcn/ui primitives in use
+├── hooks/use-toast.ts
+└── lib/
+    ├── textGenerator.ts     # Sentence/word generation with punctuation & numbers
+    ├── quotesData.ts        # Quotes for quote mode
+    ├── behavioralMetrics.ts # Keystroke-derived metrics
+    ├── typingPersonas.ts    # Persona classification and insights
+    ├── wpmPredictor.ts      # Linear-regression WPM prediction
+    ├── sessionStorage.ts    # localStorage persistence
+    ├── exportUtils.ts       # CSV / JSON export
+    └── utils.ts             # `cn` class-name helper
 ```
 
-## API Integration
+## Prerequisites
 
-The application is prepared for backend integration with the following endpoints:
+- Node.js 18 (see `.nvmrc`; `nvm use` picks it up)
+- npm (the repo ships a `package-lock.json`)
 
-- `GET /get-text?mode=...&duration=...` - Fetch test text based on mode and duration
-- `POST /analyze` - Send keystroke data for analysis
+## Getting started
 
-Currently using stub data for development.
+```bash
+git clone https://github.com/RohanGottipati/Typing.git
+cd Typing
+npm ci
+npm run dev
+```
 
-## Technologies Used
+The dev server listens on `http://localhost:5173`.
 
-- **React 18** - UI framework
-- **TypeScript** - Type safety
-- **Vite** - Build tool and dev server
-- **Tailwind CSS** - Styling
-- **shadcn/ui** - Component library
-- **React Router** - Navigation
-- **Recharts** - Data visualization
-- **React Query** - Data fetching
+## Environment variables
+
+None. The app does not read any environment variables.
+
+## Scripts
+
+| Command | Description |
+| --- | --- |
+| `npm run dev` | Start the Vite dev server on port 5173 |
+| `npm run build` | Production build to `dist/` |
+| `npm run build:dev` | Build using Vite's development mode |
+| `npm run preview` | Serve the production build locally |
+| `npm run lint` | Run ESLint over the project |
+
+## Deployment
+
+`vercel.json` configures Vercel to install with `npm install --legacy-peer-deps`, build with `npm run build` and serve the static `dist/` output.
 
 ## Contributing
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable
-5. Submit a pull request
+See [CONTRIBUTING.md](CONTRIBUTING.md) and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). Security issues: [SECURITY.md](SECURITY.md).
 
 ## License
 
-MIT License - see LICENSE file for details
-
-## Notes
-- Documented by housekeeping updates.
+MIT — see [LICENSE](LICENSE).
