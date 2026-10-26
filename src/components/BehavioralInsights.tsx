@@ -244,19 +244,6 @@ export const BehavioralInsights: React.FC<BehavioralInsightsProps> = ({
     }
   };
   
-  const getInsightIcon = (type: string) => {
-    switch (type) {
-      case 'strength':
-        return '💚';
-      case 'weakness':
-        return '🔴';
-      case 'suggestion':
-        return '💡';
-      default:
-        return '📊';
-    }
-  };
-  
   if (insights.length === 0) {
     return (
       <Card className="bg-gray-800 border border-cyan-600 shadow-lg shadow-cyan-500/25">

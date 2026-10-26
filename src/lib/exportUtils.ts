@@ -195,19 +195,3 @@ export const exportToJSON = (data: ExportData): void => {
   link.click();
   document.body.removeChild(link);
 };
-
-export const calculateCharactersPerSecond = (keystrokeLog: Array<{ timestamp: number; key: string }>, testDuration: number): number[] => {
-  const charactersPerSecond: number[] = [];
-  const testDurationSeconds = Math.floor(testDuration);
-  
-  for (let second = 1; second <= testDurationSeconds; second++) {
-    const charactersInSecond = keystrokeLog.filter(
-      keystroke => keystroke.key !== 'Backspace' && 
-      keystroke.timestamp >= second - 1 && 
-      keystroke.timestamp < second
-    ).length;
-    charactersPerSecond.push(charactersInSecond);
-  }
-  
-  return charactersPerSecond;
-};
